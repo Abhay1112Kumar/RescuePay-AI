@@ -17,7 +17,7 @@ The UI checks `GET /api/v1/health` on mount and exposes a manual **Recheck backe
 
 The adapter in `src/api/health.ts` validates JSON at runtime: `status` must be `ok`, and `service` and `version` must be nonempty strings. Service names are configurable by the backend. HTTP failures, network errors, invalid responses (including HTML fallback pages), and a five-second timeout covering the response body are handled without displaying raw server errors. No credentials are sent by this health request.
 
-The response follows inspected backend commit `b8e0661`, specifically `backend/app/api/v1/health.py` and `backend/app/schemas/health.py`. The older API contract example omits `version` and uses a different default service name; that example is not accepted as a complete health response. See [project context](../docs/project-context.md) for the discrepancy and the backend-only contract reference.
+The response is compatible with integrated backend commit `b9d4b56`, specifically `backend/app/api/v1/health.py` and `backend/app/schemas/health.py` (version `0.2.0`). The retained API contract example omits `version` and uses a different default service name; that example is not accepted as a complete health response. See [project context](../docs/project-context.md) and the [integration review](../docs/integration-review.md) for current evidence and discrepancies.
 
 Vite proxies local `/api` requests to `http://127.0.0.1:8000` by default. To target another locally running backend, set a non-secret shell variable **before starting Vite**:
 
@@ -42,11 +42,11 @@ The tests use Node's built-in test runner and TypeScript stripping (verified on 
 
 ## Payment integration state
 
-- Backend payment APIs are placeholders. This frontend makes no payment or transaction requests.
+- Backend order creation, lookup and capture routes are implemented in the combined branch, with unresolved correctness findings. This frontend makes no payment or transaction requests. Webhooks and authentication remain placeholders.
 - Metrics display “Unavailable” / “No data yet”; they do not imply a zero balance or successful payments.
 - Transaction history is empty. Search and status filters operate on this empty state; there are no seeded transactions.
 - New payment and checkout controls are disabled. No payment creation, recovery, or success is simulated.
 - The integration checklist describes payment readiness; the separate backend health panel checks reachability only. “Frontend ready” only refers to the UI.
 - Navigation, filters, and the reporting period are local React state and reset on reload.
 
-Before enabling checkout, implement backend payment creation and status verification, connect real data sources, and test the complete payment flow. Secrets belong on the backend, never in client code.
+Before enabling checkout, resolve the [payment correctness findings](../docs/integration-review.md#unresolved-payment-correctness-and-compatibility-findings), connect the required frontend flows and data sources, and separately authorize and verify the complete Sandbox flow. Existing tests and health success do not establish payment readiness. Secrets belong on the backend, never in client code.
