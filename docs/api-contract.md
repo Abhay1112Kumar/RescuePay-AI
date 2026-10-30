@@ -53,6 +53,11 @@ Error codes currently emitted:
 | `PAYPAL_AUTH_FAILED` | 502 | PayPal rejected the backend's credentials |
 | `PAYPAL_API_ERROR` | 502 | PayPal returned an error or was unreachable |
 | `PAYPAL_TIMEOUT` | 504 | PayPal call exceeded the timeout |
+| `ORDER_NOT_APPROVED` | 409 | Capture attempted before buyer approval |
+| `PAYMENT_INSTRUMENT_DECLINED` | 409 | PayPal declined the buyer's funding source |
+| `CAPTURE_IN_PROGRESS` | 409 | A concurrent capture holds the lock |
+| `AMOUNT_MISMATCH` | 409 | PayPal order amount/currency differ from backend record |
+| `PAYMENT_INVALID_STATE` | 409 | Payment is in a terminal state |
 | `INTERNAL_ERROR` | 500 | Unhandled server error |
 
 ---
@@ -77,14 +82,30 @@ Checks whether the backend service is running.
 
 ### 2. Payments
 
-**Status:** `POST /payments/orders` and `GET /payments/orders/{order_id}` are implemented (Phase 2). Capture is planned for Phase 3.
+**Status:** order creation, status lookup, and capture are implemented (Phase 3). Webhooks are planned for Phase 4.
 
 Payment endpoints return `503 PAYPAL_NOT_CONFIGURED` when the backend has no PayPal credentials, so the frontend can show a "payments unavailable" state instead of a generic failure.
 
-#### `POST /api/v1/payments/orders`
-Creates a PayPal checkout order and returns the approval link the buyer must visit.
+#### Payment status values
 
-- **Security Note:** The backend validates the amount against its own limits (allowed currencies, maximum amount). Phase 3 will derive the amount from a backend-owned record instead of accepting it from the client. Nothing is charged at this step; funds move only on capture.
+The backend keeps its own record of every payment. `status` in responses is the **backend** status, not PayPal's:
+
+| `status` | Meaning | Frontend action |
+|---|---|---|
+| `CREATED` | PayPal order exists; buyer has not approved | Send buyer to the approve link |
+| `APPROVED` | Buyer approved at PayPal | Call capture |
+| `CAPTURING` | A capture is in flight | Wait, then poll status |
+| `CAPTURE_PENDING` | PayPal accepted the capture; funds not yet settled (e.g. e-check) | Show "processing"; poll status later |
+| `COMPLETED` | Funds captured. **The only success state.** | Show success |
+| `FAILED` | Unrecoverable (provider rejection, amount mismatch) | Show failure; start a new order |
+| `VOIDED` | Order cancelled or expired at PayPal | Start a new order |
+
+`PENDING` exists internally before the PayPal order is created and is never returned.
+
+#### `POST /api/v1/payments/orders`
+Records the payment in the backend database, creates a PayPal checkout order, and returns the approval link.
+
+- **Security Note:** The backend stores the amount and currency before contacting PayPal. That stored record, not the request, is what capture later verifies against. Nothing is charged at this step.
 - **Request Body:**
 ```json
 {
@@ -106,8 +127,9 @@ Creates a PayPal checkout order and returns the approval link the buyer must vis
 ```json
 {
   "order_id": "5O190127TN364715T",
+  "payment_id": "0d0c7a2e-3f52-4b6f-9d8e-3a1c6c0f5e21",
   "status": "CREATED",
-  "request_id": "0d0c7a2e-3f52-4b6f-9d8e-3a1c6c0f5e21",
+  "request_id": "9b1f3c2e-7d4a-4e8b-a1c2-5f6e7d8c9b0a",
   "links": [
     { "href": "https://api-m.sandbox.paypal.com/v2/checkout/orders/5O190127TN364715T", "rel": "self", "method": "GET" },
     { "href": "https://www.sandbox.paypal.com/checkoutnow?token=5O190127TN364715T", "rel": "approve", "method": "GET" },
@@ -115,12 +137,13 @@ Creates a PayPal checkout order and returns the approval link the buyer must vis
   ]
 }
 ```
+  - `order_id` is the PayPal order id. Use it for the status and capture endpoints.
+  - `payment_id` is the backend's internal id, useful for support and reconciliation.
   - Redirect the buyer to the link whose `rel` is `approve` (PayPal may return `payer-action` instead; treat both the same).
-  - `request_id` is the idempotency key the backend sent to PayPal. The frontend does not need to use it, but it is useful when reporting a problem.
-  - After approval PayPal redirects the buyer to `PAYPAL_RETURN_URL` with `token=<order_id>` in the query string. The frontend must then call the capture endpoint (Phase 3); a redirect alone does not mean the payment succeeded.
+  - After approval PayPal redirects the buyer to `PAYPAL_RETURN_URL?token=<order_id>&PayerID=...`. The frontend must then call the capture endpoint. A redirect alone does not mean the payment succeeded.
 
 #### `GET /api/v1/payments/orders/{order_id}`
-Retrieves the current order status from PayPal.
+Returns the backend payment record. While the payment is still in progress the backend refreshes it from PayPal first, so an approval or cancellation that happened on PayPal's side is reflected.
 
 - **Path Parameters:**
   - `order_id` (string): 10 to 32 alphanumeric characters. Other values return 422.
@@ -128,33 +151,49 @@ Retrieves the current order status from PayPal.
 ```json
 {
   "order_id": "5O190127TN364715T",
+  "payment_id": "0d0c7a2e-3f52-4b6f-9d8e-3a1c6c0f5e21",
+  "reference_id": "RESCUE-1001",
   "status": "APPROVED",
-  "created_at": "2026-10-24T12:00:00Z",
-  "amount": { "currency_code": "USD", "value": "25.00" }
+  "paypal_status": "APPROVED",
+  "amount": { "currency_code": "USD", "value": "25.00" },
+  "capture_id": null,
+  "created_at": "2026-10-30T12:00:00Z",
+  "updated_at": "2026-10-30T12:03:10Z"
 }
 ```
-  - `status` is PayPal's order status: `CREATED`, `SAVED`, `APPROVED`, `PAYER_ACTION_REQUIRED`, `VOIDED`, or `COMPLETED`. Only `COMPLETED` means funds were captured.
-  - `created_at` and `amount` may be `null` if PayPal omits them.
-- **Errors:** `404 ORDER_NOT_FOUND` for an unknown order.
+  - `paypal_status` is PayPal's raw order status from the latest lookup, or `null` when no lookup was made (payment already terminal) or PayPal was unreachable.
+  - `capture_id` is set once a capture has been accepted by PayPal.
+- **Errors:** `404 ORDER_NOT_FOUND` when the backend has no record of the order.
 
-#### `POST /api/v1/payments/orders/{order_id}/capture` (planned, Phase 3)
-Captures funds for an approved PayPal order.
+#### `POST /api/v1/payments/orders/{order_id}/capture`
+Captures funds for an order the buyer has approved. Call it when the buyer lands on the return URL.
 
 - **Path Parameters:**
-  - `order_id` (string): The PayPal order ID returned during creation.
-- **Request Body:** `{}`
+  - `order_id` (string): The PayPal order id returned during creation.
+- **Request Body:** none (an empty `{}` is also accepted).
+- **Safety:** before capturing, the backend re-reads the order from PayPal and checks that its amount and currency equal the stored record. It uses a stable idempotency key per payment, so a retry after a timeout cannot charge twice. Calling capture again on a captured payment returns the same result.
 - **Response (200 OK):**
 ```json
 {
   "order_id": "5O190127TN364715T",
+  "payment_id": "0d0c7a2e-3f52-4b6f-9d8e-3a1c6c0f5e21",
   "capture_id": "1JS80234KJ293810L",
   "status": "COMPLETED",
-  "amount": {
-    "currency_code": "USD",
-    "value": "25.00"
-  }
+  "amount": { "currency_code": "USD", "value": "25.00" }
 }
 ```
+  - `status` is `COMPLETED` when funds were captured, or `CAPTURE_PENDING` when PayPal is still settling. Treat only `COMPLETED` as paid.
+- **Errors (409 Conflict unless noted):**
+
+| `error_code` | Meaning | Frontend action |
+|---|---|---|
+| `ORDER_NOT_APPROVED` | Buyer has not approved yet | Send buyer back to the approve link |
+| `PAYMENT_INSTRUMENT_DECLINED` | Buyer's funding source was declined | Send buyer back to the approve link to pick another method |
+| `CAPTURE_IN_PROGRESS` | Another capture call is running | Wait a moment, then poll status |
+| `AMOUNT_MISMATCH` | PayPal's order amount differs from the backend record; payment marked `FAILED` | Show failure; start a new order |
+| `PAYMENT_INVALID_STATE` | Payment is `FAILED` or `VOIDED` | Start a new order |
+| `ORDER_NOT_FOUND` (404) | Unknown order | Start a new order |
+| `PAYPAL_TIMEOUT` (504) | PayPal did not answer; outcome was verified as not captured | Retry capture |
 
 ---
 
@@ -175,6 +214,9 @@ Receives asynchronous event notifications from PayPal (e.g., `PAYMENT.CAPTURE.CO
 
 ## Payment Safety and Idempotency Rules
 
-1. **Backend Verification:** The client must never dictate the authorized captured amount without backend validation.
-2. **Idempotency:** Payment captures must be idempotent to prevent duplicate debits.
-3. **Capture Confirmation:** A transaction is considered paid only upon explicit confirmation from PayPal capture or verified webhook event.
+1. **Backend record is the authority.** The amount and currency are stored before the PayPal order is created. Capture compares PayPal's order against that record and refuses on any difference.
+2. **Capture is idempotent.** Each payment has one stable idempotency key for capture; PayPal de-duplicates retries that carry it. A repeated capture call on a captured payment returns the stored result without contacting PayPal.
+3. **One capture at a time.** A database-level lock (`CAPTURING`) stops concurrent capture requests, including from multiple backend processes.
+4. **Uncertain outcomes are verified, not retried blindly.** On a timeout or PayPal 5xx the backend re-reads the order; if PayPal shows it completed, the payment is marked `COMPLETED`, otherwise the lock is released and the client may retry.
+5. **Paid means `COMPLETED`.** A redirect to the return URL, an `APPROVED` status, or a `CAPTURE_PENDING` status is not payment confirmation.
+6. **Full audit trail.** Every state change is written to `payment_events` together with the state change itself.

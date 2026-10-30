@@ -2,6 +2,7 @@
 
 from app.schemas.health import HealthResponse
 from app.schemas.payment import (
+    CaptureResponse,
     CreateOrderRequest,
     ErrorResponse,
     MoneyAmount,
@@ -11,6 +12,7 @@ from app.schemas.payment import (
 )
 
 __all__ = [
+    "CaptureResponse",
     "CreateOrderRequest",
     "ErrorResponse",
     "HealthResponse",

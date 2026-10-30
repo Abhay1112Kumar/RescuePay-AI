@@ -11,16 +11,30 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
+from app.db.session import Database
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    """Release shared resources (PayPal HTTP client) on shutdown."""
+    """Optionally create tables for local dev; release shared resources on shutdown."""
+    settings = get_settings()
+    if settings.DATABASE_AUTO_CREATE:
+        database = getattr(
+            application.state, "database", None
+        ) or Database.from_settings(settings)
+        application.state.database = database
+        await database.create_all()
+
     yield
+
     client = getattr(application.state, "paypal_client", None)
     if client is not None:
         await client.aclose()
         application.state.paypal_client = None
+    database = getattr(application.state, "database", None)
+    if database is not None:
+        await database.dispose()
+        application.state.database = None
 
 
 def create_application() -> FastAPI:

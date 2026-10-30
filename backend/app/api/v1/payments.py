@@ -1,10 +1,11 @@
-"""Payment endpoints: order creation and retrieval."""
+"""Payment endpoints: order creation, retrieval, and capture."""
 
 from fastapi import APIRouter, Depends, Path, status
 
 from app.api.v1.deps import get_payment_service
 from app.schemas.payment import (
     ORDER_ID_PATTERN,
+    CaptureResponse,
     CreateOrderRequest,
     ErrorResponse,
     OrderResponse,
@@ -20,6 +21,8 @@ _COMMON_ERRORS = {
     504: {"model": ErrorResponse, "description": "Payment provider timeout"},
 }
 
+_ORDER_ID = Path(pattern=ORDER_ID_PATTERN, examples=["5O190127TN364715T"])
+
 
 @router.post(
     "/orders",
@@ -27,9 +30,8 @@ _COMMON_ERRORS = {
     status_code=status.HTTP_201_CREATED,
     summary="Create PayPal order",
     description=(
-        "Creates a PayPal checkout order and returns the approval link the buyer "
-        "must visit. The amount is validated against backend limits; it is not "
-        "captured until the capture endpoint is called."
+        "Records the payment, creates a PayPal checkout order and returns the "
+        "approval link the buyer must visit. Nothing is charged until capture."
     ),
     responses={
         400: {"model": ErrorResponse, "description": "Business validation failed"},
@@ -49,8 +51,11 @@ async def create_order(
     "/orders/{order_id}",
     response_model=OrderStatusResponse,
     status_code=status.HTTP_200_OK,
-    summary="Get PayPal order status",
-    description="Retrieves the current order status from PayPal.",
+    summary="Get payment status",
+    description=(
+        "Returns the backend payment record for a PayPal order, refreshed from "
+        "PayPal while the payment is still in progress."
+    ),
     responses={
         404: {"model": ErrorResponse, "description": "Order not found"},
         422: {"model": ErrorResponse, "description": "Malformed order id"},
@@ -58,8 +63,39 @@ async def create_order(
     },
 )
 async def get_order(
-    order_id: str = Path(pattern=ORDER_ID_PATTERN, examples=["5O190127TN364715T"]),
+    order_id: str = _ORDER_ID,
     service: PaymentService = Depends(get_payment_service),
 ) -> OrderStatusResponse:
-    """Fetch the order state from PayPal."""
+    """Fetch the payment state."""
     return await service.get_order(order_id)
+
+
+@router.post(
+    "/orders/{order_id}/capture",
+    response_model=CaptureResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Capture an approved order",
+    description=(
+        "Captures funds for an order the buyer has approved. The backend verifies "
+        "the order's amount and currency against its own record before capturing. "
+        "Safe to retry: a repeated call on a captured payment returns the same result."
+    ),
+    responses={
+        404: {"model": ErrorResponse, "description": "Order not found"},
+        409: {
+            "model": ErrorResponse,
+            "description": (
+                "Not capturable: ORDER_NOT_APPROVED, CAPTURE_IN_PROGRESS, "
+                "PAYMENT_INSTRUMENT_DECLINED, AMOUNT_MISMATCH, PAYMENT_INVALID_STATE"
+            ),
+        },
+        422: {"model": ErrorResponse, "description": "Malformed order id"},
+        **_COMMON_ERRORS,
+    },
+)
+async def capture_order(
+    order_id: str = _ORDER_ID,
+    service: PaymentService = Depends(get_payment_service),
+) -> CaptureResponse:
+    """Capture the order exactly once."""
+    return await service.capture_order(order_id)

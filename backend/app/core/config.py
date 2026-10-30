@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     PAYMENT_ALLOWED_CURRENCIES: str = "USD"
     PAYMENT_MAX_AMOUNT: Decimal = Decimal("10000.00")
 
+    # Persistence. SQLite for local development; use postgresql+asyncpg://... in deployment.
+    DATABASE_URL: str = f"sqlite+aiosqlite:///{BACKEND_DIR / 'rescuepay.db'}"
+    DATABASE_ECHO: bool = False
+    # Create tables from models at startup instead of running Alembic. Local dev only.
+    DATABASE_AUTO_CREATE: bool = False
+
     @property
     def paypal_configured(self) -> bool:
         """True when both PayPal credentials are present."""

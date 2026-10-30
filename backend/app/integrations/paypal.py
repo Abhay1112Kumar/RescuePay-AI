@@ -226,6 +226,28 @@ class PayPalClient:
             raise OrderNotFoundError(debug_id=body.get("debug_id"))
         _raise_for_error(status, body)
 
+    async def capture_order(self, order_id: str, request_id: str) -> dict[str, Any]:
+        """Capture an approved order.
+
+        ``request_id`` must be stable per payment: PayPal de-duplicates captures
+        that share a ``PayPal-Request-Id``, so a retry after an uncertain outcome
+        cannot charge the buyer twice.
+        """
+        status, body = await self._request(
+            "POST",
+            f"{ORDERS_PATH}/{order_id}/capture",
+            json={},
+            headers={
+                "PayPal-Request-Id": request_id,
+                "Prefer": "return=representation",
+            },
+        )
+        if status in (200, 201):
+            return body
+        if status == 404:
+            raise OrderNotFoundError(debug_id=body.get("debug_id"))
+        _raise_for_error(status, body)
+
 
 def _safe_json(response: httpx.Response) -> dict[str, Any]:
     """Parse a JSON body, returning an empty dict for empty or non-JSON responses."""
@@ -238,10 +260,22 @@ def _safe_json(response: httpx.Response) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _first_issue(body: dict[str, Any]) -> str | None:
+    """Extract ``details[0].issue`` from a PayPal error body, if present."""
+    details = body.get("details")
+    if isinstance(details, list) and details and isinstance(details[0], dict):
+        issue = details[0].get("issue")
+        if isinstance(issue, str):
+            return issue
+    return None
+
+
 def _raise_for_error(status: int, body: dict[str, Any]) -> None:
     """Translate a non-success PayPal response into a domain exception."""
     name = body.get("name")
     debug_id = body.get("debug_id")
+    paypal_name = name if isinstance(name, str) else None
+    issue = _first_issue(body)
     if status == 401:
         raise PayPalAuthError(debug_id=debug_id)
     if 400 <= status < 500:
@@ -250,10 +284,12 @@ def _raise_for_error(status: int, body: dict[str, Any]) -> None:
             "The payment provider rejected the request.",
             debug_id=debug_id,
             paypal_status=status,
-            paypal_name=name if isinstance(name, str) else None,
+            paypal_name=paypal_name,
+            issue=issue,
         )
     raise PayPalAPIError(
         debug_id=debug_id,
         paypal_status=status,
-        paypal_name=name if isinstance(name, str) else None,
+        paypal_name=paypal_name,
+        issue=issue,
     )

@@ -68,3 +68,8 @@ Thumbs.db
 !.vscode/extensions.json
 *.swp
 *.swo
+
+# Local SQLite databases
+*.db
+*.db-journal
+*.sqlite3

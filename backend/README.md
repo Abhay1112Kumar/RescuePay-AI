@@ -1,8 +1,8 @@
-# RescuePay-AI — Backend (Phase 2)
+# RescuePay-AI — Backend (Phase 3)
 
 Production-grade, modular FastAPI backend for the RescuePay-AI collaborative fintech and payment integration system.
 
-**Phase 2 status:** PayPal Sandbox OAuth, order creation, and order retrieval are implemented and covered by mocked tests. Capture, persistence, and webhooks are planned for later phases.
+**Phase 3 status:** PayPal Sandbox OAuth, order creation, status lookup, and capture are implemented with database persistence, an audited payment state machine, and idempotent capture. Webhooks are planned for Phase 4.
 
 ---
 
@@ -10,38 +10,46 @@ Production-grade, modular FastAPI backend for the RescuePay-AI collaborative fin
 
 ```text
 backend/
+├── alembic/                    # Database migrations (async env, SQLite + PostgreSQL)
+│   ├── env.py
+│   └── versions/
+├── alembic.ini
 ├── app/
 │   ├── __init__.py             # Package version (single source of truth)
 │   ├── main.py                 # FastAPI application factory, lifespan, CORS
-│   ├── api/
-│   │   └── v1/
-│   │       ├── router.py       # Aggregated API v1 router
-│   │       ├── deps.py         # Dependency providers (PayPal client, PaymentService)
-│   │       ├── health.py       # GET /api/v1/health
-│   │       ├── payments.py     # POST /payments/orders, GET /payments/orders/{id}
-│   │       └── webhooks.py     # Webhook router placeholder (Phase 4)
+│   ├── api/v1/
+│   │   ├── router.py           # Aggregated API v1 router
+│   │   ├── deps.py             # Dependency providers (DB session, PayPal client, service)
+│   │   ├── health.py           # GET /api/v1/health
+│   │   ├── payments.py         # POST /orders, GET /orders/{id}, POST /orders/{id}/capture
+│   │   └── webhooks.py         # Webhook router placeholder (Phase 4)
 │   ├── core/
 │   │   ├── config.py           # Typed settings via pydantic-settings
 │   │   ├── exceptions.py       # Domain exceptions with HTTP status + error_code
 │   │   ├── error_handlers.py   # Standard error envelope for all failures
-│   │   ├── logging.py          # Key=value structured logging (stdlib only)
-│   │   └── security.py         # Security utilities placeholder
-│   ├── db/                     # Database session placeholder (Phase 3)
+│   │   └── logging.py          # Key=value structured logging (stdlib only)
+│   ├── db/
+│   │   ├── base.py             # Declarative base
+│   │   └── session.py          # Async engine + session factory
 │   ├── integrations/
-│   │   └── paypal.py           # Async PayPal REST client (OAuth cache, Orders v2)
-│   ├── models/                 # Data models placeholder (Phase 3)
+│   │   └── paypal.py           # Async PayPal REST client (OAuth cache, Orders v2, capture)
+│   ├── models/
+│   │   └── payment.py          # Payment (trusted record) + PaymentEvent (audit trail)
+│   ├── repositories/
+│   │   └── payment_repository.py  # Data access incl. atomic capture lock
 │   ├── schemas/
-│   │   ├── health.py           # HealthResponse
-│   │   └── payment.py          # CreateOrderRequest, OrderResponse, OrderStatusResponse, ErrorResponse
+│   │   └── payment.py          # Request/response contracts
 │   └── services/
-│       └── payment_service.py  # Business rules + PayPal payload construction
+│       ├── payment_state.py    # Payment state machine
+│       └── payment_service.py  # Create / lookup / capture workflows
 ├── tests/
-│   ├── conftest.py             # Fixtures incl. FakePayPal (httpx.MockTransport)
-│   ├── test_health.py
-│   ├── test_config.py
+│   ├── conftest.py             # Fixtures: temp SQLite DB, FakePayPal (httpx.MockTransport)
+│   ├── test_health.py, test_config.py
 │   ├── test_paypal_client.py   # OAuth caching, 401 retry, timeouts, error mapping
-│   ├── test_payment_service.py # Validation rules, payload shape, response mapping
-│   └── test_payments_api.py    # Endpoint contracts and error envelope
+│   ├── test_payment_state.py   # Transition rules
+│   ├── test_payment_service.py # Persistence, validation, capture safety, concurrency
+│   ├── test_payments_api.py    # Endpoint contracts and error envelope
+│   └── test_migrations.py      # Alembic upgrade/downgrade matches models
 ├── .env.example
 ├── requirements.txt
 ├── pyproject.toml
@@ -104,6 +112,18 @@ endpoints return `503 PAYPAL_NOT_CONFIGURED` until both are set. Never commit `.
 | `PAYMENT_ALLOWED_CURRENCIES` | `USD` | Comma-separated ISO 4217 allowlist |
 | `PAYMENT_MAX_AMOUNT` | `10000.00` | Maximum order amount |
 | `LOG_LEVEL` | `INFO` | Root log level |
+| `DATABASE_URL` | `sqlite+aiosqlite:///<backend>/rescuepay.db` | Async SQLAlchemy URL. Use `postgresql+asyncpg://...` in deployment |
+| `DATABASE_ECHO` | `false` | Log SQL statements |
+| `DATABASE_AUTO_CREATE` | `false` | Create tables from models at startup (local only) |
+
+### Step 6: Create the database schema
+```powershell
+python -m alembic upgrade head
+```
+This creates `rescuepay.db` next to this README (gitignored). Re-run it after pulling new migrations. To generate a migration after changing models:
+```powershell
+python -m alembic revision --autogenerate -m "describe change"
+```
 
 ---
 
@@ -125,7 +145,7 @@ Once running:
 
 ## 4. Sandbox Walkthrough (manual)
 
-With the server running and credentials in `.env`:
+With the server running, credentials in `.env`, and the schema created:
 
 1. Open http://localhost:8000/docs and call `POST /api/v1/payments/orders` with:
    ```json
@@ -133,9 +153,12 @@ With the server running and credentials in `.env`:
    ```
 2. Copy the `href` of the link with `rel: approve` and open it in a browser.
 3. Log in with the **Personal** (buyer) sandbox account from Testing Tools > Sandbox Accounts and approve.
-4. PayPal redirects to `PAYPAL_RETURN_URL?token=<order_id>`.
-5. Call `GET /api/v1/payments/orders/{order_id}`; status should now be `APPROVED`.
-   No money moves until capture (Phase 3).
+4. PayPal redirects to `PAYPAL_RETURN_URL?token=<order_id>&PayerID=...`.
+5. Call `GET /api/v1/payments/orders/{order_id}`; `status` should now be `APPROVED`.
+6. Call `POST /api/v1/payments/orders/{order_id}/capture`; `status` should be `COMPLETED` with a `capture_id`.
+   Sandbox funds move from the buyer account to the business account. Calling capture again returns the same result.
+
+Payment flow in one line: **create → buyer approves → capture → `COMPLETED`**. Only `COMPLETED` means paid.
 
 ## 5. Running Tests & Quality Checks
 

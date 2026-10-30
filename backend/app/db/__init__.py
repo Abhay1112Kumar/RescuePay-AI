@@ -1,1 +1,6 @@
-"""Database session and connection management package."""
+"""Database engine, session, and declarative base."""
+
+from app.db.base import Base
+from app.db.session import Database
+
+__all__ = ["Base", "Database"]
