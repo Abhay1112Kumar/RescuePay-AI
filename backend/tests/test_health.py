@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app import __version__
 from app.main import app
 
 
@@ -25,7 +26,7 @@ def test_health_check_json_structure(client: TestClient) -> None:
     assert data == {
         "status": "ok",
         "service": "RescuePay-AI",
-        "version": "0.1.0",
+        "version": __version__,
     }
 
 

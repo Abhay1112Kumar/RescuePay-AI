@@ -1,9 +1,10 @@
 """Application configuration settings using pydantic-settings.
 
 Centralizes all environment variables with typed validation, secure secret handling,
-and safe development defaults for Phase 1 of RescuePay-AI.
+and safe development defaults for RescuePay-AI.
 """
 
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -30,12 +31,35 @@ class Settings(BaseSettings):
     APP_ENV: Literal["development", "testing", "staging", "production"] = "development"
     DEBUG: bool = False
     API_V1_STR: str = "/api/v1"
+    LOG_LEVEL: str = "INFO"
 
     # PayPal Configuration (Sandbox initial environment)
     PAYPAL_MODE: Literal["sandbox", "live"] = "sandbox"
     PAYPAL_CLIENT_ID: str = ""
     PAYPAL_CLIENT_SECRET: str = ""
     PAYPAL_BASE_URL: str = "https://api-m.sandbox.paypal.com"
+    PAYPAL_TIMEOUT_SECONDS: float = 15.0
+    # Buyer is redirected here by PayPal after approving or cancelling checkout.
+    PAYPAL_RETURN_URL: str = "http://localhost:5173/payment/return"
+    PAYPAL_CANCEL_URL: str = "http://localhost:5173/payment/cancel"
+
+    # Payment business rules (backend-enforced; never trust client-side limits)
+    PAYMENT_ALLOWED_CURRENCIES: str = "USD"
+    PAYMENT_MAX_AMOUNT: Decimal = Decimal("10000.00")
+
+    @property
+    def paypal_configured(self) -> bool:
+        """True when both PayPal credentials are present."""
+        return bool(self.PAYPAL_CLIENT_ID and self.PAYPAL_CLIENT_SECRET)
+
+    @property
+    def allowed_currencies(self) -> frozenset[str]:
+        """Parsed, upper-cased set of ISO 4217 currency codes accepted for orders."""
+        return frozenset(
+            code.strip().upper()
+            for code in self.PAYMENT_ALLOWED_CURRENCIES.split(",")
+            if code.strip()
+        )
 
     def __repr__(self) -> str:
         """Sanitized string representation ensuring secrets are never leaked."""
@@ -45,7 +69,9 @@ class Settings(BaseSettings):
             f"DEBUG={self.DEBUG!r}, PAYPAL_MODE={self.PAYPAL_MODE!r}, "
             f"PAYPAL_CLIENT_ID={self.PAYPAL_CLIENT_ID!r}, "
             f"PAYPAL_CLIENT_SECRET={secret_masked!r}, "
-            f"PAYPAL_BASE_URL={self.PAYPAL_BASE_URL!r})"
+            f"PAYPAL_BASE_URL={self.PAYPAL_BASE_URL!r}, "
+            f"PAYMENT_ALLOWED_CURRENCIES={self.PAYMENT_ALLOWED_CURRENCIES!r}, "
+            f"PAYMENT_MAX_AMOUNT={str(self.PAYMENT_MAX_AMOUNT)!r})"
         )
 
     def __str__(self) -> str:

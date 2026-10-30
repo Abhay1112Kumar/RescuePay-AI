@@ -1,6 +1,8 @@
-# RescuePay-AI — Backend (Phase 1)
+# RescuePay-AI — Backend (Phase 2)
 
-Production-grade, modular FastAPI backend foundation for the RescuePay-AI collaborative fintech and payment integration system.
+Production-grade, modular FastAPI backend for the RescuePay-AI collaborative fintech and payment integration system.
+
+**Phase 2 status:** PayPal Sandbox OAuth, order creation, and order retrieval are implemented and covered by mocked tests. Capture, persistence, and webhooks are planned for later phases.
 
 ---
 
@@ -9,42 +11,41 @@ Production-grade, modular FastAPI backend foundation for the RescuePay-AI collab
 ```text
 backend/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                 # FastAPI application factory and entry point
+│   ├── __init__.py             # Package version (single source of truth)
+│   ├── main.py                 # FastAPI application factory, lifespan, CORS
 │   ├── api/
-│   │   ├── __init__.py
 │   │   └── v1/
-│   │       ├── __init__.py
 │   │       ├── router.py       # Aggregated API v1 router
-│   │       ├── health.py       # Health check endpoint (/api/v1/health)
-│   │       ├── payments.py     # Payment router placeholder (Phase 2+)
-│   │       └── webhooks.py     # Webhook router placeholder (Phase 2+)
+│   │       ├── deps.py         # Dependency providers (PayPal client, PaymentService)
+│   │       ├── health.py       # GET /api/v1/health
+│   │       ├── payments.py     # POST /payments/orders, GET /payments/orders/{id}
+│   │       └── webhooks.py     # Webhook router placeholder (Phase 4)
 │   ├── core/
-│   │   ├── __init__.py
 │   │   ├── config.py           # Typed settings via pydantic-settings
+│   │   ├── exceptions.py       # Domain exceptions with HTTP status + error_code
+│   │   ├── error_handlers.py   # Standard error envelope for all failures
+│   │   ├── logging.py          # Key=value structured logging (stdlib only)
 │   │   └── security.py         # Security utilities placeholder
-│   ├── db/
-│   │   └── __init__.py         # Database session placeholder
+│   ├── db/                     # Database session placeholder (Phase 3)
 │   ├── integrations/
-│   │   ├── __init__.py
-│   │   └── paypal.py           # PayPal REST API client placeholder
-│   ├── models/
-│   │   └── __init__.py         # Data models placeholder
+│   │   └── paypal.py           # Async PayPal REST client (OAuth cache, Orders v2)
+│   ├── models/                 # Data models placeholder (Phase 3)
 │   ├── schemas/
-│   │   ├── __init__.py
-│   │   ├── health.py           # Pydantic schema for HealthResponse
-│   │   └── payment.py          # Payment schemas placeholder
+│   │   ├── health.py           # HealthResponse
+│   │   └── payment.py          # CreateOrderRequest, OrderResponse, OrderStatusResponse, ErrorResponse
 │   └── services/
-│       ├── __init__.py
-│       └── payment_service.py  # Business logic service placeholder
+│       └── payment_service.py  # Business rules + PayPal payload construction
 ├── tests/
-│   ├── __init__.py
-│   ├── test_health.py          # Health check endpoint unit & integration tests
-│   └── test_config.py          # Settings, env overrides, and isolation tests
-├── .env.example                # Example environment variables template
-├── requirements.txt            # Project dependencies
-├── pyproject.toml              # Build metadata, Ruff rules, and pytest config
-└── README.md                   # Backend documentation
+│   ├── conftest.py             # Fixtures incl. FakePayPal (httpx.MockTransport)
+│   ├── test_health.py
+│   ├── test_config.py
+│   ├── test_paypal_client.py   # OAuth caching, 401 retry, timeouts, error mapping
+│   ├── test_payment_service.py # Validation rules, payload shape, response mapping
+│   └── test_payments_api.py    # Endpoint contracts and error envelope
+├── .env.example
+├── requirements.txt
+├── pyproject.toml
+└── README.md
 ```
 
 ---
@@ -89,6 +90,21 @@ Copy-Item .env.example .env
 ```
 Default values in `.env` are configured safely for local development and PayPal Sandbox.
 
+Then fill in `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from a **Sandbox** app in the
+[PayPal Developer Dashboard](https://developer.paypal.com) (Apps & Credentials). Payment
+endpoints return `503 PAYPAL_NOT_CONFIGURED` until both are set. Never commit `.env`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PAYPAL_MODE` | `sandbox` | `sandbox` or `live` |
+| `PAYPAL_BASE_URL` | `https://api-m.sandbox.paypal.com` | PayPal REST base URL |
+| `PAYPAL_TIMEOUT_SECONDS` | `15` | Per-request timeout to PayPal |
+| `PAYPAL_RETURN_URL` | `http://localhost:5173/payment/return` | Buyer redirect after approval |
+| `PAYPAL_CANCEL_URL` | `http://localhost:5173/payment/cancel` | Buyer redirect after cancel |
+| `PAYMENT_ALLOWED_CURRENCIES` | `USD` | Comma-separated ISO 4217 allowlist |
+| `PAYMENT_MAX_AMOUNT` | `10000.00` | Maximum order amount |
+| `LOG_LEVEL` | `INFO` | Root log level |
+
 ---
 
 ## 3. Running the Application
@@ -107,7 +123,21 @@ Once running:
 
 ---
 
-## 4. Running Tests & Quality Checks
+## 4. Sandbox Walkthrough (manual)
+
+With the server running and credentials in `.env`:
+
+1. Open http://localhost:8000/docs and call `POST /api/v1/payments/orders` with:
+   ```json
+   {"reference_id": "RESCUE-1001", "currency": "USD", "amount": "1.00", "description": "Sandbox test"}
+   ```
+2. Copy the `href` of the link with `rel: approve` and open it in a browser.
+3. Log in with the **Personal** (buyer) sandbox account from Testing Tools > Sandbox Accounts and approve.
+4. PayPal redirects to `PAYPAL_RETURN_URL?token=<order_id>`.
+5. Call `GET /api/v1/payments/orders/{order_id}`; status should now be `APPROVED`.
+   No money moves until capture (Phase 3).
+
+## 5. Running Tests & Quality Checks
 
 Ensure the virtual environment is activated before running tests:
 
@@ -115,6 +145,7 @@ Ensure the virtual environment is activated before running tests:
 ```powershell
 python -m pytest -v
 ```
+All PayPal traffic in the suite is mocked with `httpx.MockTransport`; no network access or credentials are needed.
 
 ### Run Ruff Code Quality Linting
 ```powershell
@@ -136,7 +167,7 @@ python -m ruff format .
 
 ---
 
-## 5. Windows Troubleshooting Tips
+## 6. Windows Troubleshooting Tips
 
 1. **PowerShell Script Execution Policy Error:**
    If running `Activate.ps1` gives an execution policy error, enable script execution for the current user:

@@ -1,19 +1,36 @@
 """Main entry point for the RescuePay-AI FastAPI application."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import __version__
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.error_handlers import register_exception_handlers
+from app.core.logging import configure_logging
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Release shared resources (PayPal HTTP client) on shutdown."""
+    yield
+    client = getattr(application.state, "paypal_client", None)
+    if client is not None:
+        await client.aclose()
+        application.state.paypal_client = None
 
 
 def create_application() -> FastAPI:
     """Create and configure the FastAPI application instance."""
     settings = get_settings()
+    configure_logging(settings)
 
     application = FastAPI(
         title=settings.APP_NAME,
-        version="0.1.0",
+        version=__version__,
         openapi_url=f"{settings.API_V1_STR}/openapi.json",
         docs_url="/docs",
         redoc_url="/redoc",
@@ -21,6 +38,7 @@ def create_application() -> FastAPI:
             "Production-grade FastAPI backend for the RescuePay-AI "
             "payment integration system."
         ),
+        lifespan=lifespan,
     )
 
     # Controlled CORS: avoid permissive wildcards with credentials
@@ -38,6 +56,8 @@ def create_application() -> FastAPI:
             allow_headers=["*"],
         )
 
+    register_exception_handlers(application)
+
     # Register API v1 router prefix
     application.include_router(api_router, prefix=settings.API_V1_STR)
 
@@ -46,7 +66,7 @@ def create_application() -> FastAPI:
         """Root status check endpoint."""
         return {
             "name": settings.APP_NAME,
-            "version": "0.1.0",
+            "version": __version__,
             "docs": "/docs",
             "health": f"{settings.API_V1_STR}/health",
         }

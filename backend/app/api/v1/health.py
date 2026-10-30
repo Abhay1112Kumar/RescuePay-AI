@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, status
 
+from app import __version__
 from app.core.config import Settings, get_settings
 from app.schemas.health import HealthResponse
 
@@ -26,5 +27,5 @@ def check_health(settings: Settings = Depends(get_settings)) -> HealthResponse:
     return HealthResponse(
         status="ok",
         service=settings.APP_NAME,
-        version="0.1.0",
+        version=__version__,
     )

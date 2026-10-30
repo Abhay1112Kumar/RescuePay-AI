@@ -1,14 +1,101 @@
-"""Pydantic schemas for payment operations."""
+"""Pydantic schemas for payment operations (request validation and response contracts).
 
-try:
-    from pydantic import BaseModel
-except ImportError:
+These models define the API contract documented in ``docs/api-contract.md``.
+Monetary values are handled as ``Decimal`` internally and serialized as strings,
+matching PayPal's own representation and avoiding float rounding.
+"""
 
-    class BaseModel:  # type: ignore[no-redef]
-        pass
+from datetime import datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# PayPal order ids are 17 upper-case alphanumeric characters today; allow a
+# slightly wider range so a format change on PayPal's side does not break us.
+ORDER_ID_PATTERN = r"^[A-Za-z0-9]{10,32}$"
+REFERENCE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$"
 
 
-class PaymentBase(BaseModel):
-    """Base payment schema placeholder."""
+class CreateOrderRequest(BaseModel):
+    """Payload to initiate a PayPal checkout order."""
 
-    pass
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reference_id: str = Field(
+        pattern=REFERENCE_ID_PATTERN,
+        description="Caller-supplied identifier for the thing being paid for.",
+        examples=["RESCUE-1001"],
+    )
+    currency: str = Field(
+        min_length=3,
+        max_length=3,
+        description="ISO 4217 currency code.",
+        examples=["USD"],
+    )
+    amount: Decimal = Field(
+        gt=0,
+        max_digits=10,
+        decimal_places=2,
+        description="Amount with at most two decimal places.",
+        examples=["25.00"],
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=127,
+        description="Short description shown to the buyer on PayPal.",
+        examples=["Emergency donation / aid payment"],
+    )
+
+    @field_validator("currency")
+    @classmethod
+    def _upper_currency(cls, value: str) -> str:
+        value = value.upper()
+        if not value.isalpha():
+            raise ValueError("currency must be three letters")
+        return value
+
+
+class MoneyAmount(BaseModel):
+    """Monetary amount in PayPal's string representation."""
+
+    currency_code: str = Field(examples=["USD"])
+    value: str = Field(examples=["25.00"])
+
+
+class OrderLink(BaseModel):
+    """HATEOAS link returned by PayPal (the ``approve`` link is the one to follow)."""
+
+    href: str
+    rel: str
+    method: str = "GET"
+
+
+class OrderResponse(BaseModel):
+    """Response for a newly created order."""
+
+    order_id: str = Field(examples=["5O190127TN364715T"])
+    status: str = Field(examples=["CREATED"])
+    request_id: str = Field(
+        description=(
+            "Idempotency key sent to PayPal. Keep it if you need to correlate retries."
+        )
+    )
+    links: list[OrderLink]
+
+
+class OrderStatusResponse(BaseModel):
+    """Current state of an order as reported by PayPal."""
+
+    order_id: str
+    status: str = Field(examples=["CREATED", "APPROVED", "COMPLETED"])
+    created_at: datetime | None = None
+    amount: MoneyAmount | None = None
+
+
+class ErrorResponse(BaseModel):
+    """Standard error envelope (documented for OpenAPI; produced by error handlers)."""
+
+    detail: str | list
+    error_code: str
+    timestamp: datetime
+    paypal_debug_id: str | None = None
