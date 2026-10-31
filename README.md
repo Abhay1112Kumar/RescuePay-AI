@@ -16,3 +16,5 @@ Backend-priced Sandbox demo checkout is implemented with strict identity, idempo
 - [Repository instructions](AGENTS.md)
 
 Abhay currently owns both applications, integration, testing and submission preparation; Chetan's contributions are retained. Current fixes are uncommitted. Checkout defaults to disabled until explicit private Sandbox setup. Use Sandbox exclusively; never configure PayPal Live or expose credentials. The merchant assistant/read-only AI direction is approved; no AI endpoint is implemented; no commit, push, deployment or submission is authorized.
+
+- [Read-only payment evidence/explanation foundation](docs/payment-explanation.md) (local-only, default-off, no configured AI provider)

@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Base directory for backend (anchor path for .env file resolution)
@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     PAYPAL_MERCHANT_ID: str = ""
     PAYPAL_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=60)
     PAYMENT_CAPTURE_LEASE_SECONDS: int = Field(default=120, ge=30, le=3600)
+    GEMINI_ENABLED: bool = False
+    GEMINI_API_KEY: SecretStr = Field(default=SecretStr(""), repr=False)
+    GEMINI_MODEL: str = Field(
+        default="gemini-3.1-flash-lite", pattern=r"^gemini-[a-z0-9.-]{1,64}$"
+    )
+    GEMINI_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=20)
+    GEMINI_MAX_RESPONSE_BYTES: int = Field(default=16384, ge=1024, le=65536)
+    LOCAL_EVIDENCE_ENABLED: bool = False
     SANDBOX_CHECKOUT_ENABLED: bool = False
     # Buyer is redirected here by PayPal after approving or cancelling checkout.
     PAYPAL_RETURN_URL: str = "http://localhost:5173/payment/return"

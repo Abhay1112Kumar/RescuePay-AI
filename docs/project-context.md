@@ -1,5 +1,7 @@
 # RescuePay-AI project context
 
+Current work: [read-only evidence/explanation foundation](payment-explanation.md), feature/payment-explanation in a separate worktree from merged main 8ad3266. No provider is configured; no external model/PayPal calls are authorized. The sanitized local endpoint defaults off. Current changes are uncommitted; preserve the existing integration configuration/database.
+
 Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent seller PayPal Dashboard comparison of capture identity, internal payment ID, amount/currency, status and timestamp is complete; see the final checkout evidence. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](sandbox-checkout.md).
 
 Current milestone: backend-priced Sandbox demo checkout, 2026-10-31. Historical integration-only evidence remains in [integration review](integration-review.md); prior correctness fixes/checks are in [backend correctness](backend-correctness.md); latest implementation and checks are in [Sandbox checkout](sandbox-checkout.md).
@@ -8,7 +10,7 @@ Current milestone: backend-priced Sandbox demo checkout, 2026-10-31. Historical 
 
 - RescuePay-AI remains a two-person PayPal AI Hackathon project. Abhay currently handles frontend, backend, integration, testing and final submission preparation because Chetan is unavailable. Preserve Chetan's contributions and credit.
 - React + TypeScript + Vite frontend; FastAPI backend; PayPal Sandbox exclusively. Never enable Live or use real payments.
-- Verified worktree: `F:/ab/Abhay1112Kumar/RescuePay-AI-integration`, branch `integration/frontend-backend`, HEAD `1184c78` before this task. It already contains both feature histories; no new merge was necessary.
+- Verified integration worktree was preserved separately; it already contains both feature histories. No new merge was necessary.
 - Integration baseline: main `fb2be91`, frontend `9401599`, backend `b9d4b56`. These are inspected local refs, not a new remote-state verification.
 - Saved checkpoint: 8022733 on integration/frontend-backend, pushed by explicit authorization. Subsequent Dashboard-verification documentation updates remain uncommitted. Do not commit, push, merge into main, deploy or submit without an explicit instruction.
 - Original frontend checkout remains on `feature/frontend`. Its untracked documents and skills are retained; only requested ownership/context instructions are edited there. The relevant frontend skill was deliberately copied into this integration worktree and updated, without staging unrelated files.
@@ -35,3 +37,22 @@ Four reference PDFs are reported by Abhay to exist in ChatGPT but are not in the
 Private configuration and actual Sandbox checkout/cancellation verification are complete at the UI/backend-record level; see the correlated identifiers and audit evidence in the checkout report. Independent successful-capture comparison in the seller PayPal Dashboard is complete; see the final checkout evidence. The local runtime remains Sandbox-only; do not publish its unauthenticated routes.
 
 Authentication/ownership and verified webhooks remain absent; development routes must stay local. Transaction history/list, metrics and AI remain absent. Select the AI provider, sanitized audit contract, access policy and open-source license before the later AI/submission milestone. SQLite tests do not establish PostgreSQL or multi-host correctness. See the checkout report for exact commands, API changes and unresolved creation reconciliation limitations.
+
+
+## Newly available source material
+
+The four October 3 PDFs are now available at the user-provided Downloads paths and were rendered/OCR reviewed (32 pages), with substantive visual checks. See [source review](hackathon-source-review.md) for current rules, prize stacking, AG Studio licensing/compatibility caveats and the distinction between pasted proposals and implemented code. Earlier statements that the PDFs were unavailable describe prior milestones. Gemini is the intended provider in the supplied brief; no implemented adapter was found in current source. No external AI request or payment call was authorized/executed by this source review.
+
+
+## Gemini adapter and isolated Studio runtime milestone
+
+See [implementation results](gemini-implementation.md). Gemini REST adapter is implemented behind explicit default-off configuration; only mocked provider outputs were tested. No external model or PayPal calls were made. Synthetic evidence panel verification and an isolated AG Studio custom-widget runtime spike completed. Studio evaluation warnings are present; no trial key was activated and judging/deployment license access remains unresolved. All work remains uncommitted on feature/payment-explanation.
+
+
+Offline Gemini diagnosis: the first authorized synthetic attempt returned HTTP 200 but no validated selection; its root cause remains unknown because only a generic failure was retained. Safe staged diagnostics and a documented Part metadata compatibility fix now have mocked regression coverage. No additional model/payment request was made; real AI panel/uncertain/stale validation remains pending and Gemini stays disabled. See [diagnosis and proposed one-request retest](gemini-implementation.md).
+
+
+Authorized single synthetic Gemini retest succeeded: one additional request on configured gemini-3.1-flash-lite, STOP, strict selection validation passed, synthetic COMPLETED state preserved. Gemini is disabled after cleanup. Model selected supplied fact/action IDs; all display wording remains backend-authored. This verifies real model/backend selection only; browser replay and real-model uncertain/stale scenarios remain pending. See [actual retest evidence](gemini-implementation.md). No payment calls were made.
+
+
+Offline recorded real Gemini response replay now verified in the actual frontend panel: selected facts/REVIEW_RECORD, unchanged synthetic COMPLETED state, unverified freshness, keyboard reload, loading/error recovery and 320px layout. This is distinct from a live browser-to-provider test, which remains pending. Bounded uncertain/stale runner mode is prepared and mocked-tested, not authorized/executed externally. See [replay results](gemini-implementation.md).
