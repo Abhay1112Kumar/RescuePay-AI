@@ -37,7 +37,7 @@ TOKEN_REFRESH_MARGIN_SECONDS = 60
 
 
 class PayPalClient:
-    """Client for communicating with the PayPal REST API (Sandbox and Live)."""
+    """Client restricted to the canonical PayPal Sandbox REST API."""
 
     def __init__(
         self,
@@ -46,12 +46,24 @@ class PayPalClient:
         *,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        # Recheck at the I/O boundary, including injected clients and Settings
+        # constructed through validation-bypassing helpers such as model_copy.
+        if settings.PAYPAL_MODE != "sandbox" or settings.PAYPAL_BASE_URL != (
+            "https://api-m.sandbox.paypal.com"
+        ):
+            raise ValueError("Only the canonical PayPal Sandbox API is allowed.")
+        if http_client is not None and str(http_client.base_url).rstrip("/") != (
+            "https://api-m.sandbox.paypal.com"
+        ):
+            raise ValueError("Injected PayPal clients must target Sandbox.")
         self._settings = settings
         self._clock = clock
         self._owns_http_client = http_client is None
         self._http = http_client or httpx.AsyncClient(
             base_url=settings.PAYPAL_BASE_URL,
             timeout=httpx.Timeout(settings.PAYPAL_TIMEOUT_SECONDS),
+            follow_redirects=False,
+            trust_env=False,
         )
         self._access_token: str | None = None
         self._token_expires_at: float = 0.0
@@ -98,6 +110,7 @@ class PayPalClient:
                     self._settings.PAYPAL_CLIENT_SECRET,
                 ),
                 headers={"Accept": "application/json"},
+                follow_redirects=False,
             )
         except httpx.TimeoutException as exc:
             logger.warning("paypal.oauth.token.timeout")
@@ -115,7 +128,6 @@ class PayPalClient:
                 "paypal.oauth.token.failed",
                 extra={
                     "paypal_status": response.status_code,
-                    "paypal_error": body.get("error"),
                 },
             )
             raise PayPalAuthError()
@@ -163,7 +175,7 @@ class PayPalClient:
 
         try:
             response = await self._http.request(
-                method, path, json=json, headers=request_headers
+                method, path, json=json, headers=request_headers, follow_redirects=False
             )
         except httpx.TimeoutException as exc:
             logger.warning(
@@ -211,7 +223,10 @@ class PayPalClient:
             "POST",
             ORDERS_PATH,
             json=payload,
-            headers={"PayPal-Request-Id": request_id},
+            headers={
+                "PayPal-Request-Id": request_id,
+                "Prefer": "return=representation",
+            },
         )
         if status in (200, 201):
             return body
@@ -229,9 +244,9 @@ class PayPalClient:
     async def capture_order(self, order_id: str, request_id: str) -> dict[str, Any]:
         """Capture an approved order.
 
-        ``request_id`` must be stable per payment: PayPal de-duplicates captures
-        that share a ``PayPal-Request-Id``, so a retry after an uncertain outcome
-        cannot charge the buyer twice.
+        ``request_id`` is stable per payment. Provider de-duplication is bounded
+        by PayPal's retention window; the service reconciles uncertain outcomes
+        by GET instead of relying on an unlimited retry guarantee.
         """
         status, body = await self._request(
             "POST",

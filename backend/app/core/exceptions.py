@@ -131,3 +131,41 @@ class PaymentDeclinedError(PaymentStateError):
         "The payment method was declined. Ask the buyer to approve the order again "
         "with a different funding source."
     )
+
+
+class PaymentVerificationError(PaymentStateError):
+    error_code = "PAYMENT_VERIFICATION_FAILED"
+    default_detail = (
+        "Provider payment evidence could not be verified. Do not retry payment."
+    )
+
+
+class CaptureUncertainError(PaymentStateError):
+    error_code = "CAPTURE_OUTCOME_UNCERTAIN"
+    default_detail = (
+        "Capture outcome is uncertain. Check status; do not submit another capture."
+    )
+
+
+class CreationUncertainError(PaymentStateError):
+    error_code = "ORDER_CREATION_UNCERTAIN"
+    default_detail = "Order creation is unresolved. Keep the same operation key; do not create another order."
+
+
+class IdempotencyConflictError(PaymentStateError):
+    error_code = "IDEMPOTENCY_CONFLICT"
+    default_detail = (
+        "This operation key was already used with different payment details."
+    )
+
+
+class PayablesNotConfiguredError(RescuePayError):
+    status_code = 503
+    error_code = "PAYABLES_NOT_CONFIGURED"
+    default_detail = "An authoritative backend payable source has not been configured."
+
+
+class CheckoutUnavailableError(RescuePayError):
+    status_code = 503
+    error_code = "SANDBOX_CHECKOUT_UNAVAILABLE"
+    default_detail = "Sandbox checkout configuration or database setup is incomplete."

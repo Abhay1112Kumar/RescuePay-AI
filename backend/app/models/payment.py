@@ -7,7 +7,8 @@ transition and notable provider interaction.
 
 Money is stored as integer minor units (cents) to avoid floating point and to
 keep SQLite and PostgreSQL behaviour identical. All supported currencies use a
-two-digit exponent; the service layer enforces that.
+two-digit exponent in the current synthetic USD test fixtures. Final supported
+currency/price policy remains an explicit payable-source decision.
 """
 
 import uuid
@@ -50,6 +51,13 @@ class Payment(Base):
         String(36), nullable=False, unique=True, default=new_id
     )
     capture_request_id: Mapped[str | None] = mapped_column(String(36), unique=True)
+    creation_key: Mapped[str | None] = mapped_column(String(36), unique=True)
+    approval_url: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    __mapper_args__ = {"version_id_col": version}
 
     # Short, sanitized description of the last failure (never raw provider bodies).
     last_error: Mapped[str | None] = mapped_column(String(255))

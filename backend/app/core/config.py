@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Base directory for backend (anchor path for .env file resolution)
@@ -24,6 +25,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        validate_assignment=True,
     )
 
     # Core Application Settings
@@ -34,11 +36,16 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # PayPal Configuration (Sandbox initial environment)
-    PAYPAL_MODE: Literal["sandbox", "live"] = "sandbox"
+    PAYPAL_MODE: Literal["sandbox"] = "sandbox"
     PAYPAL_CLIENT_ID: str = ""
     PAYPAL_CLIENT_SECRET: str = ""
-    PAYPAL_BASE_URL: str = "https://api-m.sandbox.paypal.com"
-    PAYPAL_TIMEOUT_SECONDS: float = 15.0
+    PAYPAL_BASE_URL: Literal["https://api-m.sandbox.paypal.com"] = (
+        "https://api-m.sandbox.paypal.com"
+    )
+    PAYPAL_MERCHANT_ID: str = ""
+    PAYPAL_TIMEOUT_SECONDS: float = Field(default=15.0, gt=0, le=60)
+    PAYMENT_CAPTURE_LEASE_SECONDS: int = Field(default=120, ge=30, le=3600)
+    SANDBOX_CHECKOUT_ENABLED: bool = False
     # Buyer is redirected here by PayPal after approving or cancelling checkout.
     PAYPAL_RETURN_URL: str = "http://localhost:5173/payment/return"
     PAYPAL_CANCEL_URL: str = "http://localhost:5173/payment/cancel"

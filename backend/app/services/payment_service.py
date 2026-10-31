@@ -1,45 +1,57 @@
 """Payment domain business logic.
 
-The backend's ``Payment`` row is the trusted record. The flow is:
+The backend's ``Payment`` row records a payable validated against an injected
+backend authority. With no authority configured, creation/capture fail closed.
 
-1. ``create_order``: persist a PENDING record first (so the amount becomes a
-   backend fact), then create the PayPal order with a stable request id, then
-   mark CREATED. A provider failure marks FAILED with a sanitized reason.
+1. ``create_order``: validate the authoritative payable, persist the caller's
+   unique operation key, then create a provider order once. Ambiguous failures
+   stay CREATION_UNCERTAIN; a replay cannot create a separate provider order.
 2. ``get_order``: return the local record, refreshed from PayPal when the
    payment is still in flight (APPROVED / VOIDED / out-of-band COMPLETED).
 3. ``capture_order``: take an atomic CAPTURING lock, re-read the order from
-   PayPal, verify amount + currency against our record, capture with a stable
-   request id, and only mark COMPLETED after PayPal confirms. Uncertain
-   outcomes (timeouts, 5xx) are resolved by re-reading the order, never by a
-   blind retry. Repeated capture calls on a COMPLETED payment return the same
-   result instead of charging twice.
+   PayPal, verify order/merchant identity and money, capture with a stable
+   request id, and only mark COMPLETED from matching full-capture details.
+   Timeouts/unknown outcomes stay CAPTURE_UNCERTAIN and reconcile via GET.
+   Version checks prevent stale writes; expired locks never authorize a new POST.
 
 Every state change is written together with an audit event in one transaction.
 """
 
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.config import Settings
 from app.core.exceptions import (
     AmountMismatchError,
     CaptureInProgressError,
+    CaptureUncertainError,
+    CreationUncertainError,
+    IdempotencyConflictError,
     OrderNotApprovedError,
     OrderNotFoundError,
+    PayablesNotConfiguredError,
     PaymentDeclinedError,
     PaymentStateError,
     PaymentValidationError,
+    PaymentVerificationError,
     PayPalAPIError,
+    PayPalNotConfiguredError,
+    RescuePayError,
 )
 from app.integrations.paypal import PayPalClient
 from app.models.payment import Payment
 from app.repositories.payment_repository import PaymentRepository
 from app.schemas.payment import (
+    ORDER_ID_PATTERN,
     CaptureResponse,
     CreateOrderRequest,
     MoneyAmount,
@@ -47,6 +59,7 @@ from app.schemas.payment import (
     OrderResponse,
     OrderStatusResponse,
 )
+from app.services.payables import PayableSource
 from app.services.payment_state import (
     CAPTURABLE_STATES,
     PaymentStatus,
@@ -62,7 +75,6 @@ _APPROVAL_RELS = ("approve", "payer-action")
 # PayPal 4xx capture issues that mean "buyer must act again", not "payment failed".
 _NOT_APPROVED_ISSUES = frozenset({"ORDER_NOT_APPROVED", "PAYER_ACTION_REQUIRED"})
 _DECLINED_ISSUES = frozenset({"INSTRUMENT_DECLINED"})
-_ALREADY_CAPTURED_ISSUES = frozenset({"ORDER_ALREADY_CAPTURED"})
 
 _MINOR_UNIT = Decimal("0.01")
 
@@ -137,11 +149,52 @@ class PaymentService:
         session: AsyncSession,
         paypal_client: PayPalClient,
         settings: Settings,
+        *,
+        payable_source: PayableSource | None = None,
     ) -> None:
         self._session = session
         self._repo = PaymentRepository(session)
         self._paypal = paypal_client
         self._settings = settings
+        self._payables = payable_source
+
+    async def _commit(self, payment: Payment) -> bool:
+        """Never let an old lookup/capture overwrite a newer transaction."""
+        try:
+            await self._session.commit()
+        except StaleDataError:
+            await self._session.rollback()
+            await self._repo.refresh(payment)
+            return False
+        except IntegrityError:
+            # A provider identifier already belongs to another record. Roll back
+            # both the attempted success and its event, then quarantine safely.
+            await self._session.rollback()
+            await self._repo.refresh(payment)
+            current = PaymentStatus(payment.status)
+            if not is_terminal(current):
+                if current in (PaymentStatus.PENDING, PaymentStatus.CREATION_UNCERTAIN):
+                    target = PaymentStatus.CREATION_UNCERTAIN
+                else:
+                    target = PaymentStatus.CAPTURE_UNCERTAIN
+                if current is not target:
+                    self._repo.transition(
+                        payment, target, event_type="payment.provider_identity_conflict"
+                    )
+                else:
+                    self._repo.record_event(
+                        payment,
+                        "payment.provider_identity_conflict",
+                        from_status=current.value,
+                        to_status=current.value,
+                    )
+                try:
+                    await self._session.commit()
+                except StaleDataError:
+                    await self._session.rollback()
+                    await self._repo.refresh(payment)
+            return False
+        return True
 
     # ------------------------------------------------------------------ #
     # Validation
@@ -157,35 +210,95 @@ class PaymentService:
                 "Amount exceeds the maximum allowed of "
                 f"{format_amount(self._settings.PAYMENT_MAX_AMOUNT)} {request.currency}."
             )
+        if self._payables is None:
+            raise PayablesNotConfiguredError()
+        payable = self._payables.resolve(request.reference_id)
+        if (payable.reference_id, payable.currency, payable.amount) != (
+            request.reference_id,
+            request.currency,
+            request.amount,
+        ):
+            raise PaymentValidationError(
+                "Request does not match the backend-authorized payable."
+            )
+        if not self._settings.PAYPAL_MERCHANT_ID:
+            raise PayPalNotConfiguredError(
+                "The Sandbox merchant identity is not configured."
+            )
+
+    def _verify_identity(
+        self, payment: Payment, order: dict[str, Any]
+    ) -> dict[str, Any]:
+        units = order.get("purchase_units")
+        if (
+            order.get("id") != payment.paypal_order_id
+            or order.get("intent") != "CAPTURE"
+            or not isinstance(units, list)
+            or len(units) != 1
+            or not isinstance(units[0], dict)
+        ):
+            raise PaymentVerificationError()
+        unit = units[0]
+        payee = unit.get("payee")
+        if (
+            unit.get("reference_id") != payment.reference_id
+            or unit.get("custom_id") != payment.id
+            or not self._settings.PAYPAL_MERCHANT_ID
+            or not isinstance(payee, dict)
+            or payee.get("merchant_id") != self._settings.PAYPAL_MERCHANT_ID
+        ):
+            raise PaymentVerificationError()
+        return unit
+
+    @staticmethod
+    def _verify_money(payment: Payment, amount: Any) -> None:
+        if (
+            not isinstance(amount, dict)
+            or amount.get("currency_code") != payment.currency
+        ):
+            raise AmountMismatchError()
+        value = amount.get("value")
+        if not isinstance(value, str):
+            raise AmountMismatchError()
+        try:
+            money = Decimal(value)
+        except ArithmeticError:
+            raise AmountMismatchError() from None
+        if not money.is_finite() or money != from_minor(payment.amount_minor):
+            raise AmountMismatchError()
 
     def _verify_order_matches_record(
         self, payment: Payment, order: dict[str, Any]
     ) -> None:
         """Refuse to proceed if PayPal's order amount/currency differ from our record."""
-        found = _order_amount(order)
-        expected = (payment.currency, format_amount(from_minor(payment.amount_minor)))
-        if found is None or found != expected:
-            logger.error(
-                "payment.capture.amount_mismatch",
-                extra={
-                    "payment_id": payment.id,
-                    "order_id": payment.paypal_order_id,
-                    "expected_currency": expected[0],
-                    "expected_value": expected[1],
-                    "paypal_currency": found[0] if found else None,
-                    "paypal_value": found[1] if found else None,
-                },
-            )
-            raise AmountMismatchError()
+        unit = self._verify_identity(payment, order)
+        self._verify_money(payment, unit.get("amount"))
 
     # ------------------------------------------------------------------ #
     # Order creation
     # ------------------------------------------------------------------ #
+    async def create_checkout(
+        self, item_id: str, *, idempotency_key: str
+    ) -> OrderResponse:
+        if self._payables is None:
+            raise PayablesNotConfiguredError()
+        payable = self._payables.resolve(item_id)
+        return await self.create_order(
+            CreateOrderRequest(
+                reference_id=payable.reference_id,
+                currency=payable.currency,
+                amount=payable.amount,
+                description=payable.description,
+            ),
+            idempotency_key=idempotency_key,
+        )
+
     def build_order_payload(self, payment: Payment) -> dict[str, Any]:
         """Build the PayPal Orders v2 request body from the trusted record."""
         purchase_unit: dict[str, Any] = {
             "reference_id": payment.reference_id,
             "custom_id": payment.id,  # lets webhooks / reconciliation find our row
+            "payee": {"merchant_id": self._settings.PAYPAL_MERCHANT_ID},
             "amount": {
                 "currency_code": payment.currency,
                 "value": format_amount(from_minor(payment.amount_minor)),
@@ -206,8 +319,14 @@ class PaymentService:
             },
         }
 
-    async def create_order(self, request: CreateOrderRequest) -> OrderResponse:
+    async def create_order(
+        self, request: CreateOrderRequest, *, idempotency_key: str | None = None
+    ) -> OrderResponse:
         """Persist a payment record, create the PayPal order, return approval links."""
+        key = str(uuid.UUID(idempotency_key)) if idempotency_key else str(uuid.uuid4())
+        existing = await self._repo.get_by_creation_key(key)
+        if existing is not None:
+            return self._replay_creation(existing, request)
         self._validate_business_rules(request)
 
         payment = Payment(
@@ -217,9 +336,17 @@ class PaymentService:
             amount_minor=to_minor(request.amount),
             status=PaymentStatus.PENDING.value,
             create_request_id=str(uuid.uuid4()),
+            creation_key=key,
         )
-        await self._repo.add(payment, event_type="payment.created")
-        await self._session.commit()
+        try:
+            await self._repo.add(payment, event_type="payment.created")
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            existing = await self._repo.get_by_creation_key(key)
+            if existing is None:
+                raise
+            return self._replay_creation(existing, request)
 
         logger.info(
             "payment.order.create.requested",
@@ -236,10 +363,12 @@ class PaymentService:
             data = await self._paypal.create_order(
                 self.build_order_payload(payment), payment.create_request_id
             )
-        except PayPalAPIError as exc:
+        except RescuePayError as exc:
             self._repo.transition(
                 payment,
-                PaymentStatus.FAILED,
+                PaymentStatus.FAILED
+                if isinstance(exc, PayPalAPIError) and exc.is_client_error
+                else PaymentStatus.CREATION_UNCERTAIN,
                 event_type="paypal.order.create.failed",
                 detail=f"{exc.error_code}: {exc.detail}",
                 paypal_debug_id=exc.debug_id,
@@ -257,10 +386,14 @@ class PaymentService:
 
         order_id = data.get("id")
         status = data.get("status")
-        if not isinstance(order_id, str) or not isinstance(status, str):
+        if (
+            not isinstance(order_id, str)
+            or not re.fullmatch(ORDER_ID_PATTERN, order_id)
+            or not isinstance(status, str)
+        ):
             self._repo.transition(
                 payment,
-                PaymentStatus.FAILED,
+                PaymentStatus.CREATION_UNCERTAIN,
                 event_type="paypal.order.create.malformed",
                 detail="Malformed order response from PayPal",
                 paypal_debug_id=data.get("debug_id"),
@@ -270,17 +403,29 @@ class PaymentService:
                 "Payment provider returned a malformed order response."
             )
 
+        raw_links = data.get("links")
         links = [
             OrderLink(
                 href=link["href"], rel=link["rel"], method=link.get("method", "GET")
             )
-            for link in data.get("links", [])
-            if isinstance(link, dict) and "href" in link and "rel" in link
+            for link in (raw_links if isinstance(raw_links, list) else [])
+            if isinstance(link, dict)
+            and isinstance(link.get("href"), str)
+            and isinstance(link.get("rel"), str)
+            and isinstance(link.get("method", "GET"), str)
         ]
-        if not any(link.rel in _APPROVAL_RELS for link in links):
+        approval = next(
+            (
+                link
+                for link in links
+                if link.rel in _APPROVAL_RELS and self._safe_approval(link, order_id)
+            ),
+            None,
+        )
+        if approval is None:
             self._repo.transition(
                 payment,
-                PaymentStatus.FAILED,
+                PaymentStatus.CREATION_UNCERTAIN,
                 event_type="paypal.order.create.no_approval_link",
                 detail="PayPal order response had no approval link",
             )
@@ -289,13 +434,15 @@ class PaymentService:
             raise PayPalAPIError("Payment provider did not return an approval link.")
 
         payment.paypal_order_id = order_id
+        payment.approval_url = approval.href
         self._repo.transition(
             payment,
             PaymentStatus.CREATED,
             event_type="paypal.order.created",
             detail=f"paypal_status={status}",
         )
-        await self._session.commit()
+        if not await self._commit(payment):
+            raise CreationUncertainError()
 
         logger.info(
             "payment.order.create.succeeded",
@@ -310,7 +457,55 @@ class PaymentService:
             payment_id=payment.id,
             status=PaymentStatus(payment.status),
             request_id=payment.create_request_id,
-            links=links,
+            links=[link for link in links if link.rel not in _APPROVAL_RELS]
+            + [approval],
+        )
+
+    @staticmethod
+    def _safe_approval(link: OrderLink, order_id: str) -> bool:
+        try:
+            url = urlsplit(link.href)
+            return (
+                link.method == "GET"
+                and url.scheme == "https"
+                and url.hostname == "www.sandbox.paypal.com"
+                and url.port in (None, 443)
+                and not url.username
+                and not url.password
+                and url.path == "/checkoutnow"
+                and not url.fragment
+                and parse_qs(url.query).get("token") == [order_id]
+            )
+        except ValueError:
+            return False
+
+    def _replay_creation(
+        self, payment: Payment, request: CreateOrderRequest
+    ) -> OrderResponse:
+        if (
+            payment.reference_id,
+            payment.currency,
+            payment.amount_minor,
+            payment.description,
+        ) != (
+            request.reference_id,
+            request.currency,
+            to_minor(request.amount),
+            request.description,
+        ):
+            raise IdempotencyConflictError()
+        if not payment.paypal_order_id or not payment.approval_url:
+            raise CreationUncertainError()
+        if not self._safe_approval(
+            OrderLink(href=payment.approval_url, rel="approve"), payment.paypal_order_id
+        ):
+            raise CreationUncertainError()
+        return OrderResponse(
+            order_id=payment.paypal_order_id,
+            payment_id=payment.id,
+            status=PaymentStatus(payment.status),
+            request_id=payment.create_request_id,
+            links=[OrderLink(href=payment.approval_url, rel="approve")],
         )
 
     # ------------------------------------------------------------------ #
@@ -322,10 +517,21 @@ class PaymentService:
             raise OrderNotFoundError()
         return payment
 
-    def _sync_from_paypal(self, payment: Payment, order: dict[str, Any]) -> None:
+    def _sync_from_paypal(self, payment: Payment, order: dict[str, Any]) -> bool:
         """Apply PayPal's view of the order to our record where it is authoritative."""
         current = PaymentStatus(payment.status)
         paypal_status = order.get("status")
+
+        try:
+            self._verify_order_matches_record(payment, order)
+        except (AmountMismatchError, PaymentVerificationError):
+            self._mark_uncertain(payment, event_type="paypal.order.lookup.unverified")
+            return False
+
+        if paypal_status == "COMPLETED" or _first_capture(order) is not None:
+            return self._apply_capture_result(
+                payment, order, event_prefix="paypal.order.lookup"
+            )
 
         if paypal_status == "APPROVED" and current is PaymentStatus.CREATED:
             self._repo.transition(
@@ -335,20 +541,26 @@ class PaymentService:
             self._repo.transition(
                 payment, PaymentStatus.VOIDED, event_type="paypal.order.voided"
             )
-        elif paypal_status == "COMPLETED" and current in (
-            *CAPTURABLE_STATES,
-            PaymentStatus.CAPTURE_PENDING,
-        ):
-            # Captured outside this flow (or settlement finished). Record the truth.
-            self._apply_capture_result(
-                payment, order, event_prefix="paypal.order.lookup"
-            )
+        # APPROVED after a timed-out capture does not prove that no capture is
+        # still in flight. An uncertain payment is never made capturable here.
+        return True
+
+    def _capture_lease_expired(self, payment: Payment) -> bool:
+        return (
+            datetime.now(UTC) - _as_utc(payment.updated_at)
+        ).total_seconds() >= self._settings.PAYMENT_CAPTURE_LEASE_SECONDS
 
     async def get_order(self, order_id: str) -> OrderStatusResponse:
         """Return the payment record, refreshed from PayPal while it is in flight."""
         payment = await self._load_by_order_id(order_id)
         current = PaymentStatus(payment.status)
         paypal_status: str | None = None
+        provider_refreshed = False
+
+        if current is PaymentStatus.CAPTURING and self._capture_lease_expired(payment):
+            self._mark_uncertain(payment, event_type="payment.capture.lease_expired")
+            await self._commit(payment)
+            current = PaymentStatus(payment.status)
 
         if not is_terminal(current) and current is not PaymentStatus.CAPTURING:
             try:
@@ -372,13 +584,18 @@ class PaymentService:
             else:
                 raw = order.get("status")
                 paypal_status = raw if isinstance(raw, str) else None
-                self._sync_from_paypal(payment, order)
-                await self._session.commit()
+                provider_refreshed = self._sync_from_paypal(payment, order)
+                if not await self._commit(payment):
+                    provider_refreshed = False
+                    paypal_status = None
 
-        return self._status_response(payment, paypal_status)
+        return self._status_response(payment, paypal_status, provider_refreshed)
 
     def _status_response(
-        self, payment: Payment, paypal_status: str | None
+        self,
+        payment: Payment,
+        paypal_status: str | None,
+        provider_refreshed: bool = False,
     ) -> OrderStatusResponse:
         return OrderStatusResponse(
             order_id=payment.paypal_order_id or "",
@@ -386,6 +603,7 @@ class PaymentService:
             reference_id=payment.reference_id,
             status=PaymentStatus(payment.status),
             paypal_status=paypal_status,
+            provider_refreshed=provider_refreshed,
             amount=_money(payment),
             capture_id=payment.paypal_capture_id,
             created_at=_as_utc(payment.created_at),
@@ -404,89 +622,91 @@ class PaymentService:
             amount=_money(payment),
         )
 
-    def _apply_capture_result(
-        self, payment: Payment, body: dict[str, Any], *, event_prefix: str
-    ) -> None:
-        """Record the outcome described by a capture (or completed order) body."""
-        capture = _first_capture(body)
-        capture_id = capture.get("id") if capture else None
-        capture_status = capture.get("status") if capture else None
-        debug_id = body.get("debug_id")
-
-        if isinstance(capture_id, str):
-            payment.paypal_capture_id = capture_id
-
-        # Flag (but do not hide) a captured amount that differs from our record.
-        if capture and isinstance(capture.get("amount"), dict):
-            got = (
-                capture["amount"].get("currency_code"),
-                capture["amount"].get("value"),
-            )
-            expected = (
-                payment.currency,
-                format_amount(from_minor(payment.amount_minor)),
-            )
-            if got != expected:
-                logger.error(
-                    "payment.capture.captured_amount_mismatch",
-                    extra={
-                        "payment_id": payment.id,
-                        "expected": expected,
-                        "captured": got,
-                    },
-                )
-                self._repo.record_event(
-                    payment,
-                    f"{event_prefix}.captured_amount_mismatch",
-                    from_status=payment.status,
-                    to_status=payment.status,
-                    detail=f"expected={expected[0]} {expected[1]} captured={got[0]} {got[1]}",
-                )
-
-        if capture_status == "COMPLETED":
-            self._repo.transition(
+    def _mark_uncertain(self, payment: Payment, *, event_type: str) -> None:
+        if PaymentStatus(payment.status) is PaymentStatus.CAPTURE_UNCERTAIN:
+            self._repo.record_event(
                 payment,
-                PaymentStatus.COMPLETED,
-                event_type=f"{event_prefix}.completed",
-                detail=f"capture_id={capture_id}",
-                paypal_debug_id=debug_id,
-            )
-        elif capture_status == "PENDING":
-            if PaymentStatus(payment.status) is not PaymentStatus.CAPTURE_PENDING:
-                self._repo.transition(
-                    payment,
-                    PaymentStatus.CAPTURE_PENDING,
-                    event_type=f"{event_prefix}.pending",
-                    detail=f"capture_id={capture_id}",
-                    paypal_debug_id=debug_id,
-                )
-        elif capture_status in ("DECLINED", "FAILED"):
-            self._repo.transition(
-                payment,
-                PaymentStatus.FAILED,
-                event_type=f"{event_prefix}.declined",
-                detail=f"capture_status={capture_status}",
-                paypal_debug_id=debug_id,
-            )
-        elif body.get("status") == "COMPLETED":
-            # Order says COMPLETED but no capture detail was returned. Treat as
-            # completed; the capture id can be back-filled by lookup or webhook.
-            self._repo.transition(
-                payment,
-                PaymentStatus.COMPLETED,
-                event_type=f"{event_prefix}.completed_without_capture_detail",
-                paypal_debug_id=debug_id,
+                event_type,
+                from_status=payment.status,
+                to_status=payment.status,
             )
         else:
-            # Unknown capture status: do not guess. Keep the lock released as APPROVED
-            # so a later lookup or retry can resolve it.
+            self._repo.transition(
+                payment, PaymentStatus.CAPTURE_UNCERTAIN, event_type=event_type
+            )
+
+    def _apply_capture_result(
+        self, payment: Payment, body: dict[str, Any], *, event_prefix: str
+    ) -> bool:
+        """Only verified single full-capture evidence may establish payment success."""
+        try:
+            # Legacy rows may originate from caller-selected prices. A migration
+            # quarantines old success, and lookup must not bypass price authority
+            # when re-establishing success under the stricter rules.
+            self._validate_business_rules(
+                CreateOrderRequest(
+                    reference_id=payment.reference_id,
+                    currency=payment.currency,
+                    amount=from_minor(payment.amount_minor),
+                    description=payment.description,
+                )
+            )
+            unit = self._verify_identity(payment, body)
+            if "amount" in unit:
+                self._verify_money(payment, unit["amount"])
+            payments = unit.get("payments")
+            captures = payments.get("captures") if isinstance(payments, dict) else None
+            if (
+                not isinstance(captures, list)
+                or len(captures) != 1
+                or not isinstance(captures[0], dict)
+            ):
+                raise PaymentVerificationError()
+            capture = captures[0]
+            capture_id = capture.get("id")
+            if not isinstance(capture_id, str) or not capture_id.strip():
+                raise PaymentVerificationError()
+            if payment.paypal_capture_id and payment.paypal_capture_id != capture_id:
+                raise PaymentVerificationError()
+            self._verify_money(payment, capture.get("amount"))
+            status = capture.get("status")
+            if (
+                body.get("status") != "COMPLETED"
+                or capture.get("final_capture") is not True
+            ):
+                raise PaymentVerificationError()
+            target = {
+                "COMPLETED": PaymentStatus.COMPLETED,
+                "PENDING": PaymentStatus.CAPTURE_PENDING,
+                "DECLINED": PaymentStatus.FAILED,
+                "FAILED": PaymentStatus.FAILED,
+            }.get(status)
+            if target is None:
+                raise PaymentVerificationError()
+        except (
+            AmountMismatchError,
+            PaymentVerificationError,
+            PaymentValidationError,
+            PayablesNotConfiguredError,
+            PayPalNotConfiguredError,
+        ):
+            self._mark_uncertain(payment, event_type=f"{event_prefix}.unverified")
+            return False
+
+        payment.paypal_capture_id = capture_id
+        if PaymentStatus(payment.status) is not target:
+            suffix = {
+                PaymentStatus.COMPLETED: "completed",
+                PaymentStatus.CAPTURE_PENDING: "pending",
+                PaymentStatus.FAILED: "declined",
+            }[target]
             self._repo.transition(
                 payment,
-                PaymentStatus.APPROVED,
-                event_type=f"{event_prefix}.unknown_capture_status",
-                detail=f"capture_status={capture_status}",
-                paypal_debug_id=debug_id,
+                target,
+                event_type=f"{event_prefix}.{suffix}",
+                detail=f"capture_id={capture_id}",
             )
+        return True
 
     async def _release_capture_lock(
         self,
@@ -504,51 +724,33 @@ class PaymentService:
             detail=detail,
             paypal_debug_id=paypal_debug_id,
         )
-        await self._session.commit()
+        await self._commit(payment)
 
     async def _resolve_uncertain_capture(
-        self, payment: Payment, order_id: str, cause: PayPalAPIError
+        self, payment: Payment, order_id: str, cause: RescuePayError
     ) -> CaptureResponse:
-        """The capture call failed without a definitive answer. Ask PayPal what happened."""
-        logger.warning(
-            "payment.capture.outcome_uncertain",
-            extra={
-                "payment_id": payment.id,
-                "order_id": order_id,
-                "error_code": cause.error_code,
-                "paypal_debug_id": cause.debug_id,
-            },
-        )
+        """Persist uncertainty first. Reconcile by GET, never by another capture POST."""
+        self._mark_uncertain(payment, event_type="paypal.capture.outcome_uncertain")
+        await self._commit(payment)
+        if is_terminal(PaymentStatus(payment.status)):
+            if PaymentStatus(payment.status) is PaymentStatus.COMPLETED:
+                return self._capture_response(payment)
+            raise CaptureUncertainError(debug_id=cause.debug_id)
         try:
             order = await self._paypal.get_order(order_id)
-        except (PayPalAPIError, OrderNotFoundError):
-            await self._release_capture_lock(
-                payment,
-                PaymentStatus.APPROVED,
-                event_type="paypal.capture.outcome_unknown",
-                detail=f"{cause.error_code}; verification lookup also failed",
-                paypal_debug_id=cause.debug_id,
-            )
-            raise cause from None
-
-        if order.get("status") == "COMPLETED":
-            self._apply_capture_result(
-                payment, order, event_prefix="paypal.capture.recovered"
-            )
-            await self._session.commit()
+        except RescuePayError:
+            raise CaptureUncertainError(debug_id=cause.debug_id) from None
+        self._sync_from_paypal(payment, order)
+        await self._commit(payment)
+        if PaymentStatus(payment.status) in (
+            PaymentStatus.COMPLETED,
+            PaymentStatus.CAPTURE_PENDING,
+        ):
             return self._capture_response(payment)
-
-        await self._release_capture_lock(
-            payment,
-            PaymentStatus.APPROVED,
-            event_type="paypal.capture.not_performed",
-            detail=f"{cause.error_code}; order status {order.get('status')}",
-            paypal_debug_id=cause.debug_id,
-        )
-        raise cause
+        raise CaptureUncertainError(debug_id=cause.debug_id)
 
     async def capture_order(self, order_id: str) -> CaptureResponse:
-        """Capture an approved order exactly once."""
+        """Serialize a capture and reconcile uncertain attempts without recharging."""
         payment = await self._load_by_order_id(order_id)
         current = PaymentStatus(payment.status)
 
@@ -566,6 +768,17 @@ class PaymentService:
                 },
             )
             return self._capture_response(payment)
+        if current is PaymentStatus.CAPTURE_UNCERTAIN or (
+            current is PaymentStatus.CAPTURING and self._capture_lease_expired(payment)
+        ):
+            await self.get_order(order_id)
+            await self._repo.refresh(payment)
+            if PaymentStatus(payment.status) in (
+                PaymentStatus.COMPLETED,
+                PaymentStatus.CAPTURE_PENDING,
+            ):
+                return self._capture_response(payment)
+            raise CaptureUncertainError()
         if current is PaymentStatus.CAPTURING:
             raise CaptureInProgressError()
         if current not in CAPTURABLE_STATES:
@@ -574,7 +787,17 @@ class PaymentService:
             )
 
         # Atomic lock: only one caller (across processes) gets past this point.
-        won = await self._repo.try_begin_capture(payment.id)
+        if self._payables is None:
+            raise PayablesNotConfiguredError()
+        self._validate_business_rules(
+            CreateOrderRequest(
+                reference_id=payment.reference_id,
+                currency=payment.currency,
+                amount=from_minor(payment.amount_minor),
+                description=payment.description,
+            )
+        )
+        won = await self._repo.try_begin_capture(payment.id, payment.version)
         if not won:
             await self._session.rollback()
             await self._repo.refresh(payment)
@@ -583,9 +806,7 @@ class PaymentService:
             raise CaptureInProgressError()
 
         previous = current
-        payment.status = (
-            PaymentStatus.CAPTURING.value
-        )  # mirror the SQL UPDATE in memory
+        await self._repo.refresh(payment)
         if payment.capture_request_id is None:
             payment.capture_request_id = str(uuid.uuid4())
         self._repo.record_event(
@@ -595,7 +816,9 @@ class PaymentService:
             to_status=PaymentStatus.CAPTURING.value,
             detail=f"capture_request_id={payment.capture_request_id}",
         )
-        await self._session.commit()
+        if not await self._commit(payment):
+            raise CaptureInProgressError()
+        capture_version = payment.version
 
         logger.info(
             "payment.capture.requested",
@@ -609,7 +832,7 @@ class PaymentService:
         # Re-read the order from PayPal and verify it is ours and approved.
         try:
             order = await self._paypal.get_order(order_id)
-        except (PayPalAPIError, OrderNotFoundError) as exc:
+        except RescuePayError as exc:
             await self._release_capture_lock(
                 payment,
                 previous,
@@ -621,7 +844,7 @@ class PaymentService:
 
         try:
             self._verify_order_matches_record(payment, order)
-        except AmountMismatchError:
+        except (AmountMismatchError, PaymentVerificationError):
             await self._release_capture_lock(
                 payment,
                 PaymentStatus.FAILED,
@@ -635,8 +858,13 @@ class PaymentService:
             self._apply_capture_result(
                 payment, order, event_prefix="paypal.capture.already"
             )
-            await self._session.commit()
+            await self._commit(payment)
             return self._capture_response(payment)
+        if order["purchase_units"][0].get("payments") is not None:
+            # Any capture evidence must be reconciled, never followed by a new POST.
+            return await self._resolve_uncertain_capture(
+                payment, order_id, PaymentVerificationError()
+            )
         if paypal_status == "VOIDED":
             await self._release_capture_lock(
                 payment, PaymentStatus.VOIDED, event_type="paypal.order.voided"
@@ -654,24 +882,24 @@ class PaymentService:
             raise OrderNotApprovedError()
 
         # Capture with the stable request id.
+        await self._repo.refresh(payment)
+        if (
+            payment.status != PaymentStatus.CAPTURING
+            or payment.version != capture_version
+            or self._capture_lease_expired(payment)
+        ):
+            if payment.status in (
+                PaymentStatus.COMPLETED,
+                PaymentStatus.CAPTURE_PENDING,
+            ):
+                return self._capture_response(payment)
+            raise CaptureUncertainError()
         try:
             result = await self._paypal.capture_order(
                 order_id, payment.capture_request_id
             )
-        except OrderNotFoundError as exc:
-            await self._release_capture_lock(
-                payment,
-                PaymentStatus.APPROVED,
-                event_type="paypal.capture.order_missing",
-                paypal_debug_id=exc.debug_id,
-            )
-            raise
-        except PayPalAPIError as exc:
-            if not exc.is_client_error:
-                return await self._resolve_uncertain_capture(payment, order_id, exc)
-            if exc.issue in _ALREADY_CAPTURED_ISSUES:
-                return await self._resolve_uncertain_capture(payment, order_id, exc)
-            if exc.issue in _DECLINED_ISSUES:
+        except RescuePayError as exc:
+            if isinstance(exc, PayPalAPIError) and exc.issue in _DECLINED_ISSUES:
                 await self._release_capture_lock(
                     payment,
                     PaymentStatus.APPROVED,
@@ -680,7 +908,7 @@ class PaymentService:
                     paypal_debug_id=exc.debug_id,
                 )
                 raise PaymentDeclinedError(debug_id=exc.debug_id) from exc
-            if exc.issue in _NOT_APPROVED_ISSUES:
+            if isinstance(exc, PayPalAPIError) and exc.issue in _NOT_APPROVED_ISSUES:
                 await self._release_capture_lock(
                     payment,
                     PaymentStatus.CREATED,
@@ -689,17 +917,10 @@ class PaymentService:
                     paypal_debug_id=exc.debug_id,
                 )
                 raise OrderNotApprovedError(debug_id=exc.debug_id) from exc
-            await self._release_capture_lock(
-                payment,
-                PaymentStatus.FAILED,
-                event_type="paypal.capture.rejected",
-                detail=f"{exc.paypal_name or 'PAYPAL_ERROR'}: {exc.issue or exc.detail}",
-                paypal_debug_id=exc.debug_id,
-            )
-            raise
+            return await self._resolve_uncertain_capture(payment, order_id, exc)
 
         self._apply_capture_result(payment, result, event_prefix="paypal.capture")
-        await self._session.commit()
+        await self._commit(payment)
 
         logger.info(
             "payment.capture.finished",

@@ -80,7 +80,13 @@ async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """Return schema validation failures (422) in the standard envelope."""
-    return error_response(422, exc.errors(), "REQUEST_VALIDATION_ERROR")
+    # Pydantic validator context can contain a ValueError object, which cannot
+    # be JSON-encoded directly. Do not echo arbitrary input or exception objects.
+    errors = [
+        {"loc": error["loc"], "msg": error["msg"], "type": error["type"]}
+        for error in exc.errors()
+    ]
+    return error_response(422, errors, "REQUEST_VALIDATION_ERROR")
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

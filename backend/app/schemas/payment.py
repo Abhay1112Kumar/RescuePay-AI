@@ -18,14 +18,21 @@ ORDER_ID_PATTERN = r"^[A-Za-z0-9]{10,32}$"
 REFERENCE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$"
 
 
+class CheckoutRequest(BaseModel):
+    """Public checkout input; the browser cannot specify price or currency."""
+
+    model_config = ConfigDict(extra="forbid")
+    item_id: str = Field(pattern=REFERENCE_ID_PATTERN)
+
+
 class CreateOrderRequest(BaseModel):
-    """Payload to initiate a PayPal checkout order."""
+    """Internal validated payable assertion; not the public checkout body."""
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     reference_id: str = Field(
         pattern=REFERENCE_ID_PATTERN,
-        description="Caller-supplied identifier for the thing being paid for.",
+        description="Reference to resolve against the authoritative backend payable source.",
         examples=["RESCUE-1001"],
     )
     currency: str = Field(
@@ -38,7 +45,7 @@ class CreateOrderRequest(BaseModel):
         gt=0,
         max_digits=10,
         decimal_places=2,
-        description="Amount with at most two decimal places.",
+        description="Amount assertion with at most two decimal places; must match backend authority.",
         examples=["25.00"],
     )
     description: str | None = Field(
@@ -104,6 +111,10 @@ class OrderStatusResponse(BaseModel):
         description="Raw PayPal order status from the latest lookup, if available.",
         examples=["APPROVED"],
     )
+    provider_refreshed: bool = Field(
+        default=False,
+        description="This lookup obtained acceptable provider identity/money evidence; not itself proof of capture.",
+    )
     amount: MoneyAmount
     capture_id: str | None = None
     created_at: datetime
@@ -120,7 +131,7 @@ class CaptureResponse(BaseModel):
         description="PayPal capture id, present once PayPal accepted the capture.",
     )
     status: PaymentStatus = Field(
-        description="COMPLETED when funds are captured; CAPTURE_PENDING when PayPal is still settling."
+        description="Only verified COMPLETED is success. CAPTURE_PENDING, CAPTURE_UNCERTAIN and FAILED are not paid."
     )
     amount: MoneyAmount
 

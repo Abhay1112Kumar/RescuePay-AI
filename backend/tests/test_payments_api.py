@@ -1,10 +1,12 @@
 """API tests for /api/v1/payments endpoints, including the error envelope."""
 
+from uuid import uuid4
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.deps import get_paypal_client
+from app.api.v1.deps import get_payable_source, get_paypal_client
 from app.core.config import clear_settings_cache
 from app.integrations.paypal import ORDERS_PATH, PayPalClient
 from app.main import app
@@ -13,6 +15,7 @@ from tests.conftest import (
     SAMPLE_ORDER_ID,
     TEST_ACCESS_TOKEN,
     TEST_CLIENT_SECRET,
+    TEST_PAYABLES,
     FakePayPal,
     capture_path,
     capture_response,
@@ -23,12 +26,7 @@ from tests.conftest import (
 )
 
 ORDERS_URL = "/api/v1/payments/orders"
-VALID_BODY = {
-    "reference_id": "RESCUE-1001",
-    "currency": "USD",
-    "amount": "25.00",
-    "description": "Aid",
-}
+VALID_BODY = {"item_id": "RESCUE-1001"}
 ENVELOPE_KEYS = {"detail", "error_code", "timestamp"}
 
 
@@ -40,7 +38,9 @@ def _assert_envelope(payload: dict, error_code: str) -> None:
 
 def _create(api_client: TestClient, fake: FakePayPal) -> dict:
     fake.set("POST", ORDERS_PATH, httpx.Response(201, json=created_order_response()))
-    response = api_client.post(ORDERS_URL, json=VALID_BODY)
+    response = api_client.post(
+        ORDERS_URL, headers={"Idempotency-Key": str(uuid4())}, json=VALID_BODY
+    )
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -58,11 +58,15 @@ def test_create_order_returns_201_contract_shape(api_client, fake_paypal) -> Non
     assert any(link["rel"] == "approve" for link in body["links"])
 
 
-def test_create_order_accepts_integer_amount(api_client, fake_paypal) -> None:
+def test_create_resolves_fixed_price_from_item_id(api_client, fake_paypal) -> None:
     fake_paypal.set(
         "POST", ORDERS_PATH, httpx.Response(201, json=created_order_response())
     )
-    response = api_client.post(ORDERS_URL, json={**VALID_BODY, "amount": 25})
+    response = api_client.post(
+        ORDERS_URL,
+        headers={"Idempotency-Key": str(uuid4())},
+        json=VALID_BODY,
+    )
     assert response.status_code == 201
     sent = fake_paypal.body_of(fake_paypal.requests_to("POST", ORDERS_PATH)[0])
     assert sent["purchase_units"][0]["amount"]["value"] == "25.00"
@@ -71,7 +75,11 @@ def test_create_order_accepts_integer_amount(api_client, fake_paypal) -> None:
 def test_create_order_schema_error_returns_422_envelope(
     api_client, fake_paypal
 ) -> None:
-    response = api_client.post(ORDERS_URL, json={**VALID_BODY, "amount": "25.123"})
+    response = api_client.post(
+        ORDERS_URL,
+        headers={"Idempotency-Key": str(uuid4())},
+        json={**VALID_BODY, "amount": "25.123"},
+    )
     assert response.status_code == 422
     _assert_envelope(response.json(), "REQUEST_VALIDATION_ERROR")
     assert isinstance(response.json()["detail"], list)
@@ -81,7 +89,11 @@ def test_create_order_schema_error_returns_422_envelope(
 def test_create_order_business_error_returns_400_envelope(
     api_client, fake_paypal
 ) -> None:
-    response = api_client.post(ORDERS_URL, json={**VALID_BODY, "currency": "GBP"})
+    response = api_client.post(
+        ORDERS_URL,
+        headers={"Idempotency-Key": str(uuid4())},
+        json={"item_id": "UNKNOWN"},
+    )
     assert response.status_code == 400
     _assert_envelope(response.json(), "PAYMENT_VALIDATION_FAILED")
     assert fake_paypal.requests == []
@@ -94,9 +106,11 @@ def test_create_order_missing_credentials_returns_503(
     monkeypatch.setenv("PAYPAL_CLIENT_SECRET", "")
     clear_settings_cache()
     with TestClient(app) as client:
-        response = client.post(ORDERS_URL, json=VALID_BODY)
+        response = client.post(
+            ORDERS_URL, headers={"Idempotency-Key": str(uuid4())}, json=VALID_BODY
+        )
     assert response.status_code == 503
-    _assert_envelope(response.json(), "PAYPAL_NOT_CONFIGURED")
+    _assert_envelope(response.json(), "SANDBOX_CHECKOUT_UNAVAILABLE")
 
 
 def test_create_order_paypal_failure_returns_502_with_debug_id(
@@ -114,7 +128,9 @@ def test_create_order_paypal_failure_returns_502_with_debug_id(
             },
         ),
     )
-    response = api_client.post(ORDERS_URL, json=VALID_BODY)
+    response = api_client.post(
+        ORDERS_URL, headers={"Idempotency-Key": str(uuid4())}, json=VALID_BODY
+    )
     assert response.status_code == 502
     body = response.json()
     _assert_envelope(body, "PAYPAL_API_ERROR")
@@ -123,6 +139,8 @@ def test_create_order_paypal_failure_returns_502_with_debug_id(
 
 
 def test_create_order_paypal_timeout_returns_504(settings) -> None:
+    app.dependency_overrides[get_payable_source] = lambda: TEST_PAYABLES
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/oauth2/token"):
             return httpx.Response(
@@ -137,7 +155,9 @@ def test_create_order_paypal_timeout_returns_504(settings) -> None:
         settings, http_client=http
     )
     with TestClient(app) as client:
-        response = client.post(ORDERS_URL, json=VALID_BODY)
+        response = client.post(
+            ORDERS_URL, headers={"Idempotency-Key": str(uuid4())}, json=VALID_BODY
+        )
     assert response.status_code == 504
     _assert_envelope(response.json(), "PAYPAL_TIMEOUT")
 
@@ -157,6 +177,7 @@ def test_get_order_returns_200_contract_shape(api_client, fake_paypal) -> None:
         "reference_id",
         "status",
         "paypal_status",
+        "provider_refreshed",
         "amount",
         "capture_id",
         "created_at",
@@ -269,22 +290,21 @@ def test_capture_unknown_order_returns_404(api_client) -> None:
     _assert_envelope(response.json(), "ORDER_NOT_FOUND")
 
 
-def test_capture_after_timeout_returns_504_and_is_retryable(
+def test_capture_timeout_is_explicitly_uncertain_and_cannot_recharge(
     api_client, fake_paypal
 ) -> None:
     _create(api_client, fake_paypal)
     fake_paypal.set("GET", order_path(), order_detail_response(status="APPROVED"))
     fake_paypal.set("POST", capture_path(), httpx.ReadTimeout("slow"))
     response = api_client.post(_capture_url())
-    assert response.status_code == 504
-    _assert_envelope(response.json(), "PAYPAL_TIMEOUT")
-
-    fake_paypal.set(
-        "POST", capture_path(), httpx.Response(201, json=capture_response())
-    )
+    assert response.status_code == 409
+    _assert_envelope(response.json(), "CAPTURE_OUTCOME_UNCERTAIN")
     retry = api_client.post(_capture_url())
-    assert retry.status_code == 200
-    assert retry.json()["status"] == "COMPLETED"
+    assert retry.status_code == 409
+    assert len(fake_paypal.requests_to("POST", capture_path())) == 1
+    status = api_client.get(f"{ORDERS_URL}/{SAMPLE_ORDER_ID}").json()
+    assert status["status"] == "CAPTURE_UNCERTAIN"
+    assert status["provider_refreshed"] is True
 
 
 def test_status_reflects_capture(api_client, fake_paypal) -> None:
@@ -316,7 +336,11 @@ def test_no_secret_or_token_in_any_response(api_client, fake_paypal) -> None:
         "POST", capture_path(), httpx.Response(201, json=capture_response())
     )
     for response in (
-        api_client.post(ORDERS_URL, json={**VALID_BODY, "currency": "GBP"}),
+        api_client.post(
+            ORDERS_URL,
+            headers={"Idempotency-Key": str(uuid4())},
+            json={"item_id": "UNKNOWN"},
+        ),
         api_client.get(f"{ORDERS_URL}/{SAMPLE_ORDER_ID}"),
         api_client.post(_capture_url()),
     ):
@@ -337,3 +361,52 @@ def test_openapi_documents_payment_endpoints(api_client) -> None:
     assert "/api/v1/payments/orders" in spec["paths"]
     assert "/api/v1/payments/orders/{order_id}" in spec["paths"]
     assert "/api/v1/payments/orders/{order_id}/capture" in spec["paths"]
+
+
+def test_creation_requires_a_uuid_operation_key(api_client, fake_paypal):
+    for headers in ({}, {"Idempotency-Key": "not-a-uuid"}):
+        response = api_client.post(ORDERS_URL, json=VALID_BODY, headers=headers)
+        assert response.status_code == 422
+        _assert_envelope(response.json(), "REQUEST_VALIDATION_ERROR")
+    assert fake_paypal.requests == []
+
+
+def test_api_creation_replay_and_conflict(api_client, fake_paypal):
+    headers = {"Idempotency-Key": str(uuid4())}
+    fake_paypal.set("POST", ORDERS_PATH, created_order_response())
+    first = api_client.post(ORDERS_URL, json=VALID_BODY, headers=headers)
+    second = api_client.post(ORDERS_URL, json=VALID_BODY, headers=headers)
+    assert first.status_code == second.status_code == 201
+    assert first.json()["payment_id"] == second.json()["payment_id"]
+    conflict = api_client.post(
+        ORDERS_URL, json={"item_id": "LIMIT-1000"}, headers=headers
+    )
+    assert conflict.status_code == 409
+    _assert_envelope(conflict.json(), "IDEMPOTENCY_CONFLICT")
+    assert len(fake_paypal.requests_to("POST", ORDERS_PATH)) == 1
+
+
+def test_missing_payable_source_is_fail_closed(api_client, fake_paypal):
+    app.dependency_overrides[get_payable_source] = lambda: None
+    response = api_client.post(
+        ORDERS_URL, json=VALID_BODY, headers={"Idempotency-Key": str(uuid4())}
+    )
+    assert response.status_code == 503
+    _assert_envelope(response.json(), "PAYABLES_NOT_CONFIGURED")
+    assert fake_paypal.requests == []
+
+
+def test_custom_validator_errors_are_json_and_do_not_echo_input(
+    api_client, fake_paypal
+):
+    response = api_client.post(
+        ORDERS_URL,
+        json={**VALID_BODY, "currency": "1A!"},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    assert response.status_code == 422
+    _assert_envelope(response.json(), "REQUEST_VALIDATION_ERROR")
+    assert all(
+        "input" not in item and "ctx" not in item for item in response.json()["detail"]
+    )
+    assert fake_paypal.requests == []

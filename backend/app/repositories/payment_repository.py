@@ -29,7 +29,15 @@ class PaymentRepository:
 
     async def get_by_paypal_order_id(self, order_id: str) -> Payment | None:
         result = await self._session.execute(
-            select(Payment).where(Payment.paypal_order_id == order_id)
+            select(Payment)
+            .where(Payment.paypal_order_id == order_id)
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_creation_key(self, key: str) -> Payment | None:
+        result = await self._session.execute(
+            select(Payment).where(Payment.creation_key == key)
         )
         return result.scalar_one_or_none()
 
@@ -104,7 +112,9 @@ class PaymentRepository:
             paypal_debug_id=paypal_debug_id,
         )
 
-    async def try_begin_capture(self, payment_id: str) -> bool:
+    async def try_begin_capture(
+        self, payment_id: str, expected_version: int | None = None
+    ) -> bool:
         """Atomically move a capturable payment to CAPTURING.
 
         Uses a conditional UPDATE so two concurrent capture requests (even from
@@ -115,8 +125,18 @@ class PaymentRepository:
             .where(
                 Payment.id == payment_id,
                 Payment.status.in_([s.value for s in CAPTURABLE_STATES]),
+                *(
+                    [Payment.version == expected_version]
+                    if expected_version is not None
+                    else []
+                ),
             )
-            .values(status=PaymentStatus.CAPTURING.value, updated_at=datetime.now(UTC))
+            .values(
+                status=PaymentStatus.CAPTURING.value,
+                updated_at=datetime.now(UTC),
+                version=Payment.version + 1,
+            )
+            .execution_options(synchronize_session=False)
         )
         return (result.rowcount or 0) == 1
 

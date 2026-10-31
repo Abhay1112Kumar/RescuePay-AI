@@ -10,13 +10,13 @@ from sqlalchemy import select
 from app.core.exceptions import (
     AmountMismatchError,
     CaptureInProgressError,
+    CaptureUncertainError,
     OrderNotApprovedError,
     OrderNotFoundError,
     PaymentDeclinedError,
     PaymentStateError,
     PaymentValidationError,
     PayPalAPIError,
-    PayPalTimeoutError,
 )
 from app.integrations.paypal import ORDERS_PATH
 from app.models.payment import Payment, PaymentEvent
@@ -32,6 +32,7 @@ from app.services.payment_state import PaymentStatus
 from tests.conftest import (
     SAMPLE_CAPTURE_ID,
     SAMPLE_ORDER_ID,
+    TEST_PAYABLES,
     FakePayPal,
     capture_path,
     capture_response,
@@ -57,7 +58,9 @@ def _request(**overrides) -> CreateOrderRequest:
 
 @pytest.fixture
 def service(db_session, paypal_client, settings) -> PaymentService:
-    return PaymentService(db_session, paypal_client, settings)
+    return PaymentService(
+        db_session, paypal_client, settings, payable_source=TEST_PAYABLES
+    )
 
 
 async def _create(service: PaymentService, fake: FakePayPal, **overrides):
@@ -164,7 +167,9 @@ async def test_create_rejects_amount_over_limit(service, fake_paypal) -> None:
 
 
 async def test_create_accepts_amount_at_limit(service, fake_paypal) -> None:
-    result = await _create(service, fake_paypal, amount="1000.00")
+    result = await _create(
+        service, fake_paypal, amount="1000.00", reference_id="LIMIT-1000"
+    )
     assert result.order_id == SAMPLE_ORDER_ID
 
 
@@ -182,7 +187,7 @@ def test_schema_rejects_bad_reference_ids(reference_id: str) -> None:
         _request(reference_id=reference_id)
 
 
-async def test_create_paypal_failure_marks_record_failed(
+async def test_create_5xx_keeps_creation_uncertain(
     service, fake_paypal, db_session
 ) -> None:
     fake_paypal.set(
@@ -193,16 +198,15 @@ async def test_create_paypal_failure_marks_record_failed(
 
     rows = (await db_session.execute(select(Payment))).scalars().all()
     assert len(rows) == 1
-    assert rows[0].status == PaymentStatus.FAILED
+    assert rows[0].status == PaymentStatus.CREATION_UNCERTAIN
     assert rows[0].paypal_order_id is None
-    assert "PAYPAL_API_ERROR" in (rows[0].last_error or "")
     assert await _events(db_session, rows[0].id) == [
         "payment.created",
         "paypal.order.create.failed",
     ]
 
 
-async def test_create_missing_approval_link_marks_failed(
+async def test_create_missing_approval_link_keeps_creation_uncertain(
     service, fake_paypal, db_session
 ) -> None:
     body = created_order_response()
@@ -211,7 +215,7 @@ async def test_create_missing_approval_link_marks_failed(
     with pytest.raises(PayPalAPIError):
         await service.create_order(_request())
     rows = (await db_session.execute(select(Payment))).scalars().all()
-    assert rows[0].status == PaymentStatus.FAILED
+    assert rows[0].status == PaymentStatus.CREATION_UNCERTAIN
 
 
 async def test_each_create_has_unique_request_id(service, fake_paypal) -> None:
@@ -270,6 +274,7 @@ async def test_get_records_out_of_band_capture(service, fake_paypal) -> None:
                 {
                     "id": "CAPX",
                     "status": "COMPLETED",
+                    "final_capture": True,
                     "amount": {"currency_code": "USD", "value": "25.00"},
                 }
             ],
@@ -397,6 +402,7 @@ async def test_capture_when_paypal_already_completed_reconciles(
                 {
                     "id": "CAPY",
                     "status": "COMPLETED",
+                    "final_capture": True,
                     "amount": {"currency_code": "USD", "value": "25.00"},
                 }
             ],
@@ -442,32 +448,36 @@ async def test_capture_timeout_then_paypal_shows_completed_recovers(
     assert result.status is PaymentStatus.COMPLETED
     assert result.capture_id == SAMPLE_CAPTURE_ID
     events = await _events(db_session, created.payment_id)
-    assert "paypal.capture.recovered.completed" in events
+    assert "paypal.order.lookup.completed" in events
 
 
-async def test_capture_timeout_then_not_captured_releases_lock_and_raises(
+async def test_capture_timeout_stays_uncertain_and_reconciles_without_retry(
     service, fake_paypal, db_session
 ) -> None:
     created = await _approved(service, fake_paypal)
     fake_paypal.set("POST", capture_path(), httpx.ReadTimeout("slow"))
-    with pytest.raises(PayPalTimeoutError):
+    with pytest.raises(CaptureUncertainError):
         await service.capture_order(SAMPLE_ORDER_ID)
     row = await _payment(db_session, created.payment_id)
-    assert row.status == PaymentStatus.APPROVED
-    first_request_id = row.capture_request_id
-    assert first_request_id is not None
-
-    # Retry succeeds and reuses the SAME PayPal-Request-Id so PayPal can de-duplicate.
+    assert row.status == PaymentStatus.CAPTURE_UNCERTAIN
+    request_id = row.capture_request_id
+    with pytest.raises(CaptureUncertainError):
+        await service.capture_order(SAMPLE_ORDER_ID)
     fake_paypal.set(
-        "POST", capture_path(), httpx.Response(201, json=capture_response())
+        "GET",
+        order_path(),
+        order_detail_response(
+            status="COMPLETED",
+            captures=[
+                capture_response()["purchase_units"][0]["payments"]["captures"][0]
+            ],
+        ),
     )
     result = await service.capture_order(SAMPLE_ORDER_ID)
     assert result.status is PaymentStatus.COMPLETED
-    sent_ids = {
-        r.headers["PayPal-Request-Id"]
-        for r in fake_paypal.requests_to("POST", capture_path())
-    }
-    assert sent_ids == {first_request_id}
+    requests = fake_paypal.requests_to("POST", capture_path())
+    assert len(requests) == 1
+    assert requests[0].headers["PayPal-Request-Id"] == request_id
 
 
 async def test_capture_5xx_is_treated_as_uncertain(
@@ -475,10 +485,10 @@ async def test_capture_5xx_is_treated_as_uncertain(
 ) -> None:
     created = await _approved(service, fake_paypal)
     fake_paypal.set("POST", capture_path(), paypal_error(500, "INTERNAL_SERVER_ERROR"))
-    with pytest.raises(PayPalAPIError):
+    with pytest.raises(CaptureUncertainError):
         await service.capture_order(SAMPLE_ORDER_ID)
     row = await _payment(db_session, created.payment_id)
-    assert row.status == PaymentStatus.APPROVED  # lock released, retry allowed
+    assert row.status == PaymentStatus.CAPTURE_UNCERTAIN
 
 
 async def test_capture_instrument_declined(service, fake_paypal, db_session) -> None:
@@ -537,7 +547,7 @@ async def test_capture_already_captured_issue_reconciles(service, fake_paypal) -
     assert result.status is PaymentStatus.COMPLETED
 
 
-async def test_capture_unknown_4xx_marks_failed(
+async def test_unclassified_capture_error_requires_reconciliation(
     service, fake_paypal, db_session
 ) -> None:
     created = await _approved(service, fake_paypal)
@@ -546,11 +556,10 @@ async def test_capture_unknown_4xx_marks_failed(
         capture_path(),
         paypal_error(422, "UNPROCESSABLE_ENTITY", "TRANSACTION_REFUSED"),
     )
-    with pytest.raises(PayPalAPIError):
+    with pytest.raises(CaptureUncertainError):
         await service.capture_order(SAMPLE_ORDER_ID)
     row = await _payment(db_session, created.payment_id)
-    assert row.status == PaymentStatus.FAILED
-    assert "TRANSACTION_REFUSED" in (row.last_error or "")
+    assert row.status == PaymentStatus.CAPTURE_UNCERTAIN
 
 
 async def test_capture_pending_settlement(service, fake_paypal, db_session) -> None:
@@ -630,7 +639,9 @@ async def test_capture_lock_blocks_second_caller(
     await db_session.commit()
 
     async with database.session_factory() as other_session:
-        other = PaymentService(other_session, paypal_client, settings)
+        other = PaymentService(
+            other_session, paypal_client, settings, payable_source=TEST_PAYABLES
+        )
         with pytest.raises(CaptureInProgressError):
             await other.capture_order(SAMPLE_ORDER_ID)
     assert fake_paypal.requests_to("POST", capture_path()) == []
@@ -654,12 +665,15 @@ async def test_concurrent_captures_charge_once(fake_paypal, database, settings) 
     client = make_paypal_client(settings, fake_paypal)
 
     async with database.session_factory() as s:
-        created = await _create(PaymentService(s, client, settings), fake_paypal)
+        created = await _create(
+            PaymentService(s, client, settings, payable_source=TEST_PAYABLES),
+            fake_paypal,
+        )
     fake_paypal.set("GET", order_path(), order_detail_response(status="APPROVED"))
 
     async def slow_capture():
         await asyncio.sleep(0.05)
-        return httpx.Response(201, json=capture_response())
+        return httpx.Response(201, json=capture_response(payment_id=created.payment_id))
 
     async def handler(request: httpx.Request) -> httpx.Response:
         fake_paypal.requests.append(request)
@@ -677,9 +691,9 @@ async def test_concurrent_captures_charge_once(fake_paypal, database, settings) 
     async def attempt():
         async with database.session_factory() as s:
             try:
-                return await PaymentService(s, shared, settings).capture_order(
-                    SAMPLE_ORDER_ID
-                )
+                return await PaymentService(
+                    s, shared, settings, payable_source=TEST_PAYABLES
+                ).capture_order(SAMPLE_ORDER_ID)
             except CaptureInProgressError as exc:
                 return exc
 

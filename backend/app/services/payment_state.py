@@ -22,10 +22,12 @@ from enum import StrEnum
 
 class PaymentStatus(StrEnum):
     PENDING = "PENDING"
+    CREATION_UNCERTAIN = "CREATION_UNCERTAIN"
     CREATED = "CREATED"
     APPROVED = "APPROVED"
     CAPTURING = "CAPTURING"
     CAPTURE_PENDING = "CAPTURE_PENDING"
+    CAPTURE_UNCERTAIN = "CAPTURE_UNCERTAIN"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     VOIDED = "VOIDED"
@@ -41,11 +43,18 @@ CAPTURABLE_STATES: frozenset[PaymentStatus] = frozenset(
 )
 
 ALLOWED_TRANSITIONS: dict[PaymentStatus, frozenset[PaymentStatus]] = {
-    PaymentStatus.PENDING: frozenset({PaymentStatus.CREATED, PaymentStatus.FAILED}),
+    PaymentStatus.PENDING: frozenset(
+        {PaymentStatus.CREATED, PaymentStatus.FAILED, PaymentStatus.CREATION_UNCERTAIN}
+    ),
+    PaymentStatus.CREATION_UNCERTAIN: frozenset(
+        {PaymentStatus.CREATED, PaymentStatus.FAILED}
+    ),
     PaymentStatus.CREATED: frozenset(
         {
             PaymentStatus.APPROVED,
             PaymentStatus.CAPTURING,
+            PaymentStatus.CAPTURE_UNCERTAIN,
+            PaymentStatus.CAPTURE_PENDING,
             PaymentStatus.COMPLETED,  # captured out-of-band, observed via lookup
             PaymentStatus.VOIDED,
             PaymentStatus.FAILED,
@@ -54,6 +63,8 @@ ALLOWED_TRANSITIONS: dict[PaymentStatus, frozenset[PaymentStatus]] = {
     PaymentStatus.APPROVED: frozenset(
         {
             PaymentStatus.CAPTURING,
+            PaymentStatus.CAPTURE_UNCERTAIN,
+            PaymentStatus.CAPTURE_PENDING,
             PaymentStatus.COMPLETED,
             PaymentStatus.VOIDED,
             PaymentStatus.FAILED,
@@ -63,6 +74,7 @@ ALLOWED_TRANSITIONS: dict[PaymentStatus, frozenset[PaymentStatus]] = {
         {
             PaymentStatus.COMPLETED,
             PaymentStatus.CAPTURE_PENDING,
+            PaymentStatus.CAPTURE_UNCERTAIN,
             PaymentStatus.FAILED,
             PaymentStatus.VOIDED,  # order found voided during pre-capture verification
             # Capture did not happen (not approved, declined, uncertain outcome):
@@ -72,7 +84,10 @@ ALLOWED_TRANSITIONS: dict[PaymentStatus, frozenset[PaymentStatus]] = {
         }
     ),
     PaymentStatus.CAPTURE_PENDING: frozenset(
-        {PaymentStatus.COMPLETED, PaymentStatus.FAILED}
+        {PaymentStatus.COMPLETED, PaymentStatus.FAILED, PaymentStatus.CAPTURE_UNCERTAIN}
+    ),
+    PaymentStatus.CAPTURE_UNCERTAIN: frozenset(
+        {PaymentStatus.COMPLETED, PaymentStatus.CAPTURE_PENDING, PaymentStatus.FAILED}
     ),
     PaymentStatus.COMPLETED: frozenset(),
     PaymentStatus.FAILED: frozenset(),

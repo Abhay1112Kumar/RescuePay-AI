@@ -9,6 +9,8 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import PayPalNotConfiguredError
 from app.db.session import Database
 from app.integrations.paypal import PayPalClient
+from app.services.demo_catalog import DemoCatalog
+from app.services.payables import PayableSource
 from app.services.payment_service import PaymentService
 
 
@@ -52,10 +54,18 @@ def get_paypal_client(
     return client
 
 
+def get_payable_source() -> PayableSource | None:
+    """Approved demo authority only; synthetic test authorities override this separately."""
+    return DemoCatalog()
+
+
 def get_payment_service(
     session: AsyncSession = Depends(get_db_session),
     paypal_client: PayPalClient = Depends(get_paypal_client),
     settings: Settings = Depends(get_settings),
+    payable_source: PayableSource | None = Depends(get_payable_source),
 ) -> PaymentService:
     """Construct a PaymentService bound to the request session and shared PayPal client."""
-    return PaymentService(session, paypal_client, settings)
+    return PaymentService(
+        session, paypal_client, settings, payable_source=payable_source
+    )
