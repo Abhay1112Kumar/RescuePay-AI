@@ -1,3 +1,4 @@
+import { PaymentExplanation } from './PaymentExplanation'
 import type { useSandboxCheckout } from '../hooks/useSandboxCheckout'
 import type { CheckoutPhase } from '../checkout/controller'
 import './SandboxCheckout.css'
@@ -62,6 +63,7 @@ export function SandboxCheckout({ checkout }: { checkout: ReturnType<typeof useS
         {op?.orderId && <button className="sandbox-secondary" disabled={state.busy} onClick={() => { void controller.refresh() }}>Check backend payment status</button>}
         {op && controller.canStartNew() && <button className="sandbox-secondary" onClick={controller.newCheckout}>Explicitly start a new checkout</button>}
       </div>
+      {op?.orderId && <PaymentExplanation key={op.orderId} orderId={op.orderId} />}
       <p className="sandbox-footnote">Approval opens in this same tab. Session storage retains this operation across the return/cancel redirect. A redirect, HTTP 200, approval, or processing state never counts as payment confirmation.</p>
     </section>
   )

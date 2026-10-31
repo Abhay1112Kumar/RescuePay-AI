@@ -152,3 +152,18 @@ Nonexpired CAPTURING returns 409 CAPTURE_IN_PROGRESS. Lease expiry (120 seconds 
 POST /webhooks/paypal is planned and absent. No webhook signature/deduplication guarantee exists. Authentication/ownership, automatic creation reconciliation, refunds, transaction list/metrics, public hosting and AI are outside this milestone. The full demo checkout UI is implemented and mocked; real Sandbox verification is pending.
 
 Provider semantics were checked against [Orders v2](https://developer.paypal.com/api/orders/v2) and [PayPal idempotency](https://developer.paypal.com/api/rest/reference/idempotency/). Provider retention is bounded; it cannot replace durable state and reconciliation. Real Sandbox checkout verification is pending.
+
+
+## GET /payments/orders/{order_id}/evidence (local development only)
+
+Default-off LOCAL_EVIDENCE_ENABLED gate plus development/loopback restrictions. No public audit/list endpoint or model provider is enabled. 404 when gated/unknown order; path pattern matches the existing order lookup; 200 has Cache-Control: no-store. No PayPal calls or writes.
+
+Response: {evidence, ai_status, ai_reason, model_selection}. Evidence includes state, amount, observed_at, record_updated_at, source="stored_backend_record", provider_freshness="not_checked", current_provider_state_verified=false, uncertain, events_truncated, events[{code,state,recorded_at}], facts[{code,text}], safe_actions[]. Identifiers and all arbitrary details/PII/provider payloads are excluded. Current runtime always returns ai_status="unavailable", ai_reason="provider_not_configured", model_selection=null. Facts/suggestions are backend-authored, not AI. Future injected structured plans cannot add actions or override facts. Exact bounds, safe codes, local setup and provider contract: [payment explanation foundation](payment-explanation.md).
+
+
+### Gemini adapter update
+
+The local evidence route can now inject the Gemini REST adapter only when GEMINI_ENABLED=true and a private GEMINI_API_KEY is configured. Default remains unavailable. GET is read-only with respect to payment state; when explicitly enabled it can incur a model request, so do not treat it as a free provider probe. The model selects/orders grounded fact/action IDs only; no model-authored payment claims or free-form prose is accepted. API schema remains evidence/ai_status/ai_reason/model_selection. Configured failures, response truncation/limits, invalid JSON/IDs/claims and timeouts return unavailable AI with original facts. Client disconnect cancels explanation processing (499 if still observable). Configure deadlines at most 20 seconds; frontend evidence deadline is 25 seconds. See [implementation and private setup](gemini-implementation.md). Authentication remains absent and local guards remain mandatory.
+
+
+Evidence diagnostics (local-only): unavailable AI may include optional ai_diagnostic with an allowlisted category/stage, elapsed_ms, sanitized finish_reason and validation_paths ($, fact_codes, action_codes only). This additive field contains no provider body, selected unknown IDs, exception messages or credentials. Verified evidence and payment state retain their existing semantics. See gemini-implementation.md for categories and offline diagnosis.
