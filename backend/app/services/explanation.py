@@ -52,17 +52,22 @@ async def explain_payment(
     provider: ExplanationProvider | None = None,
     *,
     timeout: float = 2.0,
+    owner_id: str | None = None,
 ) -> EvidenceResponse:
     # Single SELECT snapshot binds record and audit evidence. Bound the event tail.
-    rows = (
-        await session.execute(
-            select(Payment, PaymentEvent)
-            .outerjoin(PaymentEvent, PaymentEvent.payment_id == Payment.id)
-            .where(Payment.paypal_order_id == order_id)
-            .order_by(PaymentEvent.id.desc())
-            .limit(51)
+    query = (
+        select(Payment, PaymentEvent)
+        .outerjoin(PaymentEvent, PaymentEvent.payment_id == Payment.id)
+        .where(Payment.paypal_order_id == order_id)
+        .order_by(PaymentEvent.id.desc())
+    )
+    if isinstance(owner_id, str):
+        query = query.where(
+            Payment.reference_id.startswith("synthetic")
+            | Payment.reference_id.startswith("demo-")
         )
-    ).all()
+    query = query.limit(51)
+    rows = (await session.execute(query)).all()
     if not rows:
         raise OrderNotFoundError()
     payment = rows[0][0]

@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     GEMINI_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=20)
     GEMINI_MAX_RESPONSE_BYTES: int = Field(default=16384, ge=1024, le=65536)
     LOCAL_EVIDENCE_ENABLED: bool = False
+    LOCAL_EVIDENCE_TOKEN: SecretStr = Field(default=SecretStr(""), repr=False)
+    LOCAL_EVIDENCE_USER_ID: str = "demo-merchant"
     SANDBOX_CHECKOUT_ENABLED: bool = False
     # Buyer is redirected here by PayPal after approving or cancelling checkout.
     PAYPAL_RETURN_URL: str = "http://localhost:5173/payment/return"

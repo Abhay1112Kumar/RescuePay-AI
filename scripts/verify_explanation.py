@@ -25,6 +25,8 @@ settings = Settings(
     LOCAL_EVIDENCE_ENABLED=True,
     GEMINI_ENABLED=False,
     DATABASE_URL=f"sqlite+aiosqlite:///{db_path}",
+    LOCAL_EVIDENCE_TOKEN="synthetic-local-token",
+    LOCAL_EVIDENCE_USER_ID="demo-merchant",
 )
 database = Database(settings.DATABASE_URL)
 
