@@ -76,6 +76,8 @@ async def main():
     settings.GEMINI_ENABLED = True
     settings.APP_ENV = "development"
     settings.LOCAL_EVIDENCE_ENABLED = True
+    settings.LOCAL_EVIDENCE_TOKEN = "synthetic-local-token"
+    settings.LOCAL_EVIDENCE_USER_ID = "demo-merchant"
     settings.DATABASE_AUTO_CREATE = False
     settings.DATABASE_URL = f"sqlite+aiosqlite:///{FOLDER / ('real-smoke-synthetic-' + uuid4().hex + '.db')}"
     database = Database(settings.DATABASE_URL)
@@ -151,7 +153,13 @@ async def main():
         ) as client:
             for order, state, _ in scenarios:
                 started = monotonic()
-                result = await client.get(f"/api/v1/payments/orders/{order}/evidence")
+                result = await client.get(
+                    f"/api/v1/payments/orders/{order}/evidence",
+                    headers={
+                        "Authorization": "Bearer synthetic-local-token",
+                        "X-RescuePay-Local-User": "demo-merchant",
+                    },
+                )
                 body = result.json()
                 valid = (
                     result.status_code == 200

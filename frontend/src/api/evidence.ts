@@ -39,7 +39,12 @@ export async function loadEvidence(orderId: string, signal: AbortSignal, fetcher
   signal.throwIfAborted(); signal.addEventListener('abort', cancel, { once: true })
   const timer = setTimeout(cancel, 25000)
   try {
-    const response = await fetcher(`/api/v1/payments/orders/${orderId}/evidence`, { method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json' }, signal: abort.signal })
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {}
+    const token = env.VITE_LOCAL_EVIDENCE_TOKEN
+    const user = env.VITE_LOCAL_EVIDENCE_USER_ID
+    if (token && user) { headers.Authorization = `Bearer ${token}`; headers['X-RescuePay-Local-User'] = user }
+    const response = await fetcher(`/api/v1/payments/orders/${orderId}/evidence`, { method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'error', headers, signal: abort.signal })
     if (!response.ok || !/^application\/json(?:;|$)/i.test(response.headers.get('content-type') ?? '')) throw new Error('Evidence unavailable')
     return parseEvidence(await response.json())
   } finally { clearTimeout(timer); signal.removeEventListener('abort', cancel) }

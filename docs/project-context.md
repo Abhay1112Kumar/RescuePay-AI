@@ -56,3 +56,6 @@ Authorized single synthetic Gemini retest succeeded: one additional request on c
 
 
 Offline recorded real Gemini response replay now verified in the actual frontend panel: selected facts/REVIEW_RECORD, unchanged synthetic COMPLETED state, unverified freshness, keyboard reload, loading/error recovery and 320px layout. This is distinct from a live browser-to-provider test, which remains pending. Bounded uncertain/stale runner mode is prepared and mocked-tested, not authorized/executed externally. See [replay results](gemini-implementation.md).
+## Secure local explanation boundary
+
+The evidence/explanation route now requires loopback development mode plus a configured local bearer token and matching demo user header. Only synthetic/demo reference namespaces are projected; missing or mismatched identity is rejected and payment state remains authoritative. This is a local demonstration boundary, not production authentication or durable merchant ownership. Gemini remains disabled and no provider calls were made for this milestone.

@@ -18,7 +18,7 @@ export function PaymentExplanation({ orderId }: { orderId: string }) {
     <h3 id={titleId}>Payment evidence and explanation</h3>
     <p>Read-only stored evidence. Loading this panel never refreshes PayPal or performs a payment action.</p>
     {busy && <p role="status">Loading stored evidence…</p>}
-    {error && <p role="status">Evidence unavailable. This endpoint requires explicit local development configuration. Payment status above remains separate.</p>}
+    {error && <p role="status">Evidence unavailable or local authentication is missing. Payment status above remains separate; no evidence was disclosed.</p>}
     {data && <>
       <h4>Backend facts (not AI)</h4>
       <p>Stored state: {data.evidence.state} · {data.evidence.amount.currency_code} {data.evidence.amount.value}</p>

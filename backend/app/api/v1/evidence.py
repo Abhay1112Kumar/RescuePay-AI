@@ -55,6 +55,22 @@ def get_explanation_provider(
     )
 
 
+def require_local_identity(
+    request: Request, settings: Settings = Depends(get_settings)
+) -> str:
+    expected = settings.LOCAL_EVIDENCE_TOKEN.get_secret_value()
+    if (
+        not expected
+        or request.headers.get("authorization") != f"Bearer {expected}"
+        or request.headers.get("x-rescuepay-local-user")
+        != settings.LOCAL_EVIDENCE_USER_ID
+    ):
+        raise HTTPException(
+            status_code=401, detail="Local evidence authentication required"
+        )
+    return settings.LOCAL_EVIDENCE_USER_ID
+
+
 @router.get(
     "/orders/{order_id}/evidence",
     response_model=EvidenceResponse,
@@ -67,6 +83,7 @@ async def get_evidence(
     session: AsyncSession = Depends(get_db_session),
     provider: ExplanationProvider | None = Depends(get_explanation_provider),
     settings: Settings = Depends(get_settings),
+    owner_id: str = Depends(require_local_identity),
 ) -> EvidenceResponse:
     response.headers["Cache-Control"] = "no-store"
 
@@ -76,7 +93,11 @@ async def get_evidence(
 
     work = asyncio.create_task(
         explain_payment(
-            session, order_id, provider, timeout=settings.GEMINI_TIMEOUT_SECONDS + 0.5
+            session,
+            order_id,
+            provider,
+            timeout=settings.GEMINI_TIMEOUT_SECONDS + 0.5,
+            owner_id=owner_id,
         )
     )
     disconnected = asyncio.create_task(wait_for_disconnect())

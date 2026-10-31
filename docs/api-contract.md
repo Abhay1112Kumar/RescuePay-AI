@@ -167,3 +167,6 @@ The local evidence route can now inject the Gemini REST adapter only when GEMINI
 
 
 Evidence diagnostics (local-only): unavailable AI may include optional ai_diagnostic with an allowlisted category/stage, elapsed_ms, sanitized finish_reason and validation_paths ($, fact_codes, action_codes only). This additive field contains no provider body, selected unknown IDs, exception messages or credentials. Verified evidence and payment state retain their existing semantics. See gemini-implementation.md for categories and offline diagnosis.
+### Local authentication boundary
+
+The local evidence route requires the development/loopback gate plus `Authorization: Bearer <LOCAL_EVIDENCE_TOKEN>` and `X-RescuePay-Local-User` matching `LOCAL_EVIDENCE_USER_ID`; missing or mismatched identity returns 401. Only synthetic/demo reference namespaces are eligible. This is not production identity management; local guards remain mandatory.

@@ -17,7 +17,7 @@ from tests.conftest import SAMPLE_ORDER_ID, make_settings
 
 async def seed(session, state="CAPTURE_UNCERTAIN"):
     payment = Payment(
-        reference_id="private-reference",
+        reference_id="synthetic-reference",
         description="buyer@example.test SECRET",
         currency="USD",
         amount_minor=100,
@@ -189,21 +189,71 @@ async def test_actual_readonly_route_needs_no_paypal_dependency(database):
         await seed(session)
     app.state.database = database
     app.dependency_overrides[get_settings] = lambda: make_settings(
-        APP_ENV="development", LOCAL_EVIDENCE_ENABLED=True
+        APP_ENV="development",
+        LOCAL_EVIDENCE_ENABLED=True,
+        LOCAL_EVIDENCE_TOKEN="test-local-token",
+        LOCAL_EVIDENCE_USER_ID="demo-merchant",
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 123)),
         base_url="http://localhost",
     ) as client:
         response = await client.get(
-            f"/api/v1/payments/orders/{SAMPLE_ORDER_ID}/evidence"
+            f"/api/v1/payments/orders/{SAMPLE_ORDER_ID}/evidence",
+            headers={
+                "Authorization": "Bearer test-local-token",
+                "X-RescuePay-Local-User": "demo-merchant",
+            },
         )
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
         assert response.json()["ai_status"] == "unavailable"
         assert "SECRET" not in response.text
-        missing = await client.get("/api/v1/payments/orders/UNKNOWNORDER123/evidence")
+        missing = await client.get(
+            "/api/v1/payments/orders/UNKNOWNORDER123/evidence",
+            headers={
+                "Authorization": "Bearer test-local-token",
+                "X-RescuePay-Local-User": "demo-merchant",
+            },
+        )
         assert missing.status_code == 404
+
+
+async def test_local_identity_blocks_missing_and_cross_owner_access(database):
+    async with database.session_factory() as session:
+        await seed(session)
+    app.state.database = database
+    app.dependency_overrides[get_settings] = lambda: make_settings(
+        APP_ENV="development",
+        LOCAL_EVIDENCE_ENABLED=True,
+        LOCAL_EVIDENCE_TOKEN="test-local-token",
+        LOCAL_EVIDENCE_USER_ID="demo-merchant",
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 123)),
+        base_url="http://localhost",
+    ) as client:
+        path = f"/api/v1/payments/orders/{SAMPLE_ORDER_ID}/evidence"
+        assert (await client.get(path)).status_code == 401
+        assert (
+            await client.get(
+                path,
+                headers={
+                    "Authorization": "Bearer test-local-token",
+                    "X-RescuePay-Local-User": "other-merchant",
+                },
+            )
+        ).status_code == 401
+        response = await client.get(
+            path,
+            headers={
+                "Authorization": "Bearer test-local-token",
+                "X-RescuePay-Local-User": "demo-merchant",
+            },
+        )
+        assert response.status_code == 200
+        assert "SECRET" not in response.text and "buyer@example" not in response.text
+        assert response.json()["evidence"]["state"] == "CAPTURE_UNCERTAIN"
 
 
 async def test_bounded_event_tail_and_missing_capture_do_not_invent_success(db_session):
