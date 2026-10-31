@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon, type IconName } from './components/Icon'
 import { BackendHealthPanel } from './components/BackendHealthPanel'
 import { useBackendHealth } from './hooks/useBackendHealth'
+import { useSandboxCheckout } from './hooks/useSandboxCheckout'
+import { SandboxCheckout } from './components/SandboxCheckout'
 import type { BackendHealthState } from './api/health'
 import './App.css'
 
-type Page = 'Overview' | 'Transactions' | 'Integrations'
+type Page = 'Overview' | 'Transactions' | 'Integrations' | 'Checkout'
 type Status = 'All transactions' | 'Successful' | 'Pending' | 'Failed'
 
 const navigation: { page: Page; icon: IconName }[] = [
   { page: 'Overview', icon: 'grid' },
   { page: 'Transactions', icon: 'arrows' },
   { page: 'Integrations', icon: 'plug' },
+  { page: 'Checkout', icon: 'wallet' },
 ]
 
 const metrics: { label: string; icon: IconName; description: string; color: string }[] = [
@@ -30,11 +33,11 @@ function SetupChecklist() {
       </li>
       <li>
         <span className="step-icon"><Icon name="plug" /></span>
-        <div><strong>Connect payment APIs</strong><p>Waiting for backend integration.</p><span className="step-label">Not connected</span></div>
+        <div><strong>Configure Sandbox</strong><p>Review private setup on the Checkout page.</p><span className="step-label">Setup step</span></div>
       </li>
       <li>
         <span className="step-icon"><Icon name="lock" /></span>
-        <div><strong>Enable checkout</strong><p>Available after payment verification.</p><span className="step-label">Locked</span></div>
+        <div><strong>Verify captured payment</strong><p>Only backend-confirmed capture means paid.</p><span className="step-label">Verification step</span></div>
       </li>
     </ol>
   )
@@ -60,13 +63,13 @@ function Transactions({ compact = false, onViewAll }: { compact?: boolean; onVie
       </div>
       <div className="table-scroll">
         <table>
-          <caption className="sr-only">Payment transactions. Payment APIs are not connected; no transaction data is available.</caption>
+          <caption className="sr-only">Payment transactions. Transaction history is not connected; no history records have been loaded.</caption>
           <thead><tr><th scope="col">Transaction</th><th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Date</th><th scope="col">Method</th></tr></thead>
           <tbody><tr><td colSpan={5}>
             <div className="empty-state" role="status">
               <span className="empty-icon"><Icon name={hasFilter ? 'search' : 'receipt'} /></span>
               <h3>{hasFilter ? 'No matching transactions' : 'A fresh start for your payments'}</h3>
-              <p>{hasFilter ? 'No transaction data is available to search or filter yet.' : 'Your transactions will appear here once payment APIs are connected.'}</p>
+              <p>{hasFilter ? 'No transaction data is available to search or filter yet.' : 'Transaction history will appear here once its list API is connected. The Checkout page shows the current operation separately.'}</p>
               {hasFilter && <button className="text-button" onClick={() => { setQuery(''); setStatus('All transactions'); searchRef.current?.focus() }}>Clear filters <Icon name="arrow-right" /></button>}
             </div>
           </td></tr></tbody>
@@ -127,35 +130,36 @@ function Overview({ navigate }: { navigate: (page: Page) => void }) {
   )
 }
 
-function Integrations({ health, onRecheck }: { health: BackendHealthState; onRecheck: () => void }) {
+function Integrations({ health, onRecheck, onCheckout }: { health: BackendHealthState; onRecheck: () => void; onCheckout: () => void }) {
   return (
     <div className="integration-layout">
       <section className="panel integration-main" aria-labelledby="integration-title">
         <span className="large-icon"><Icon name="plug" /></span>
         <span className="mini-eyebrow">YOUR NEXT STEP</span>
         <h2 id="integration-title">Bring your payments into the picture.</h2>
-        <p>The immediate goal is a working PayPal Sandbox payment flow. Payment APIs are currently placeholders, so payment data is unavailable and checkout remains disabled.</p>
+        <p>The backend owns the fixed-price Sandbox demo catalog. Open Checkout to inspect its configuration and payment flow; backend health alone does not enable payments.</p>
         <BackendHealthPanel health={health} onRecheck={onRecheck} />
-        <div className="integration-status"><span className="status-dot" /><strong>Payment APIs</strong><span className="badge">Not connected</span></div>
+        <div className="integration-status"><span className="status-dot" /><strong>Sandbox demo routes</strong><span className="badge">Use Checkout</span></div>
         <SetupChecklist />
-        <details className="integration-details"><summary>What needs to happen before checkout?</summary><p>Connect the backend to a payment provider, implement payment creation and status endpoints, and verify payment status on the server. Only enable checkout after the complete flow has been tested.</p><p>This frontend does not initiate payment requests or infer successful payments.</p></details>
+        <details className="integration-details"><summary>What needs to happen before checkout?</summary><p>Configure the Sandbox app, expected merchant, return URLs and disposable checkout database privately. Checkout uses its own backend configuration gate and must verify every captured payment.</p><p>Only the Checkout page can initiate an explicitly requested Sandbox checkout. Redirects and HTTP success do not establish payment success.</p></details>
       </section>
       <section className="panel checkout-panel" aria-labelledby="checkout-title">
         <span className="checkout-art"><Icon name="lock" /></span>
-        <h2 id="checkout-title">Checkout is on hold</h2>
-        <p id="checkout-reason">Payment services are not connected. Checkout stays disabled until the backend can create and verify payments.</p>
-        <button className="button checkout-button" disabled aria-describedby="checkout-reason"><Icon name="lock" /> Checkout unavailable</button>
-        <span className="checkout-note">No payment will be initiated.</span>
+        <h2 id="checkout-title">Backend-priced Sandbox checkout</h2>
+        <p id="checkout-reason">Inspect the clearly labeled demo catalog and local setup before starting a test payment.</p>
+        <button className="button checkout-button" onClick={onCheckout} aria-describedby="checkout-reason"><Icon name="wallet" /> Open Sandbox checkout</button>
+        <span className="checkout-note">Opening this page does not initiate a payment.</span>
       </section>
     </div>
   )
 }
 
 function App() {
-  const [page, setPage] = useState<Page>('Overview')
+  const [page, setPage] = useState<Page>(() => window.location.pathname === '/checkout' || window.location.pathname.startsWith('/payment/') ? 'Checkout' : 'Overview')
   const [menuOpen, setMenuOpen] = useState(false)
   const sidebarRef = useRef<HTMLElement>(null)
   const { health, recheck } = useBackendHealth()
+  const checkout = useSandboxCheckout()
   const healthLabel = health.status === 'checking'
     ? 'Checking backend health'
     : health.status === 'connected' ? 'Backend connected' : 'Backend unavailable'
@@ -164,18 +168,19 @@ function App() {
     if (!menuOpen) return
 
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const sidebar = sidebarRef.current
     const mediaQuery = window.matchMedia('(max-width: 760px)')
-    sidebarRef.current?.querySelector<HTMLButtonElement>('.sidebar-close')?.focus()
+    sidebar?.querySelector<HTMLButtonElement>('.sidebar-close')?.focus()
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') setMenuOpen(false)
       if (event.key !== 'Tab') return
 
-      const controls = Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [])
+      const controls = Array.from(sidebar?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [])
         .filter((element) => element.offsetParent !== null)
       const first = controls[0]
       const last = controls[controls.length - 1]
-      if (!sidebarRef.current?.contains(document.activeElement)) {
+      if (!sidebar?.contains(document.activeElement)) {
         event.preventDefault()
         const target = event.shiftKey ? last : first
         target?.focus()
@@ -198,7 +203,7 @@ function App() {
       document.removeEventListener('keydown', handleKeyDown)
       mediaQuery.removeEventListener('change', closeOnDesktop)
       if (previousFocus?.getClientRects().length) previousFocus.focus()
-      else sidebarRef.current?.querySelector<HTMLButtonElement>('[aria-current="page"]')?.focus()
+      else sidebar?.querySelector<HTMLButtonElement>('[aria-current="page"]')?.focus()
     }
   }, [menuOpen])
 
@@ -233,9 +238,9 @@ function App() {
           <span className="environment-badge"><span /> Development mode</span>
         </header>
         <main id="main-content" tabIndex={-1}>
-          <div className="page-heading"><div><span className="mini-eyebrow">YOUR PAYMENT COMMAND CENTER</span><h1>{page}</h1><p>{page === 'Overview' ? 'A little clarity for every payment. Let’s get you set up.' : page === 'Transactions' ? 'Follow every payment, from first attempt to final status.' : 'Connect the services that power your payment flow.'}</p></div><div className="checkout-action"><button className="button" disabled aria-describedby="checkout-hint"><Icon name="plus" /> New payment <Icon name="lock" /></button><span id="checkout-hint">Checkout disabled · APIs not connected</span></div></div>
-          <div className="development-notice"><span className="notice-icon"><Icon name="info" /></span><p><strong>You’re in a development workspace.</strong> <span role={page === 'Integrations' ? undefined : 'status'}>{healthLabel}.</span> Payment APIs are not connected. All metrics are unavailable and checkout is disabled.</p><button className="text-button" onClick={() => navigate('Integrations')}>View setup <Icon name="arrow-right" /></button></div>
-          {page === 'Overview' ? <Overview navigate={navigate} /> : page === 'Transactions' ? <Transactions /> : <Integrations health={health} onRecheck={recheck} />}
+          <div className="page-heading"><div><span className="mini-eyebrow">YOUR PAYMENT COMMAND CENTER</span><h1>{page}</h1><p>{page === 'Overview' ? 'A little clarity for every payment. Let’s get you set up.' : page === 'Transactions' ? 'Follow every payment, from first attempt to final status.' : page === 'Checkout' ? 'Select a demo item and verify its Sandbox payment.' : 'Connect the services that power your payment flow.'}</p></div><div className="checkout-action"><button className="button" onClick={() => navigate('Checkout')} aria-describedby="checkout-hint"><Icon name="wallet" /> Sandbox checkout</button><span id="checkout-hint">Demo catalog · configuration required</span></div></div>
+          <div className="development-notice"><span className="notice-icon"><Icon name="info" /></span><p><strong>You’re in a development workspace.</strong> <span role={page === 'Integrations' ? undefined : 'status'}>{healthLabel}.</span> Sandbox demo checkout is separate from health. Dashboard metrics remain unavailable; no real payments are supported.</p><button className="text-button" onClick={() => navigate('Integrations')}>View setup <Icon name="arrow-right" /></button></div>
+          {page === 'Overview' ? <Overview navigate={navigate} /> : page === 'Transactions' ? <Transactions /> : page === 'Integrations' ? <Integrations health={health} onRecheck={recheck} onCheckout={() => navigate('Checkout')} /> : <SandboxCheckout checkout={checkout} />}
           <footer className="main-footer"><span>Thoughtfully built for payments that move forward.</span><span><Icon name="shield" /> RescuePay AI <span className="footer-divider">/</span> Frontend preview</span></footer>
         </main>
       </div>
