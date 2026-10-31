@@ -1,6 +1,6 @@
 # Approved MVP feasibility review
 
-Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent comparison of the successful capture in PayPal Dashboard remains pending. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](sandbox-checkout.md).
+Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent seller PayPal Dashboard comparison of capture identity, internal payment ID, amount/currency, status and timestamp is complete; see the final checkout evidence. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](sandbox-checkout.md).
 
 Status: MVP direction and backend-priced Sandbox demo catalog approved by Abhay, 2026-10-31. The catalog and guarded checkout are implemented; real provider verification is pending private configuration. AI remains a later milestone and no AI endpoint is implemented. See [checkout evidence](sandbox-checkout.md). The reference PDFs are not in this workspace and have not been read; Abhay supplied the project context, and current official web pages were checked separately.
 

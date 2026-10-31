@@ -1,6 +1,6 @@
 # RescuePay-AI project context
 
-Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent comparison of the successful capture in PayPal Dashboard remains pending. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](sandbox-checkout.md).
+Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent seller PayPal Dashboard comparison of capture identity, internal payment ID, amount/currency, status and timestamp is complete; see the final checkout evidence. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](sandbox-checkout.md).
 
 Current milestone: backend-priced Sandbox demo checkout, 2026-10-31. Historical integration-only evidence remains in [integration review](integration-review.md); prior correctness fixes/checks are in [backend correctness](backend-correctness.md); latest implementation and checks are in [Sandbox checkout](sandbox-checkout.md).
 
@@ -10,7 +10,7 @@ Current milestone: backend-priced Sandbox demo checkout, 2026-10-31. Historical 
 - React + TypeScript + Vite frontend; FastAPI backend; PayPal Sandbox exclusively. Never enable Live or use real payments.
 - Verified worktree: `F:/ab/Abhay1112Kumar/RescuePay-AI-integration`, branch `integration/frontend-backend`, HEAD `1184c78` before this task. It already contains both feature histories; no new merge was necessary.
 - Integration baseline: main `fb2be91`, frontend `9401599`, backend `b9d4b56`. These are inspected local refs, not a new remote-state verification.
-- All current changes are deliberately uncommitted. Do not commit, push, merge into main, deploy or submit without an explicit instruction.
+- Saved checkpoint: 8022733 on integration/frontend-backend, pushed by explicit authorization. Subsequent Dashboard-verification documentation updates remain uncommitted. Do not commit, push, merge into main, deploy or submit without an explicit instruction.
 - Original frontend checkout remains on `feature/frontend`. Its untracked documents and skills are retained; only requested ownership/context instructions are edited there. The relevant frontend skill was deliberately copied into this integration worktree and updated, without staging unrelated files.
 - Follow [root instructions](../AGENTS.md), [frontend instructions](../frontend/AGENTS.md) and the included [frontend skill](../.agents/skills/rescuepay-frontend/SKILL.md).
 
@@ -32,6 +32,6 @@ Four reference PDFs are reported by Abhay to exist in ChatGPT but are not in the
 
 ## Remaining blockers and next milestone
 
-Private configuration and actual Sandbox checkout/cancellation verification are complete at the UI/backend-record level; see the correlated identifiers and audit evidence in the checkout report. Independent successful-capture comparison in PayPal Dashboard remains pending. The local runtime remains Sandbox-only; do not publish its unauthenticated routes.
+Private configuration and actual Sandbox checkout/cancellation verification are complete at the UI/backend-record level; see the correlated identifiers and audit evidence in the checkout report. Independent successful-capture comparison in the seller PayPal Dashboard is complete; see the final checkout evidence. The local runtime remains Sandbox-only; do not publish its unauthenticated routes.
 
 Authentication/ownership and verified webhooks remain absent; development routes must stay local. Transaction history/list, metrics and AI remain absent. Select the AI provider, sanitized audit contract, access policy and open-source license before the later AI/submission milestone. SQLite tests do not establish PostgreSQL or multi-host correctness. See the checkout report for exact commands, API changes and unresolved creation reconciliation limitations.

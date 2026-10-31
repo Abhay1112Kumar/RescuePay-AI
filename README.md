@@ -1,6 +1,6 @@
 # RescuePay-AI
 
-Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent comparison of the successful capture in PayPal Dashboard remains pending. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](docs/sandbox-checkout.md).
+Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent seller PayPal Dashboard comparison of capture identity, internal payment ID, amount/currency, status and timestamp is complete; see the final checkout evidence. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](docs/sandbox-checkout.md).
 
 React/TypeScript frontend and FastAPI backend combined for local integration review.
 Backend-priced Sandbox demo checkout is implemented with strict identity, idempotency and uncertainty handling. Mocked flows and local API configuration gates are verified; real Sandbox checkout is pending private credentials.
