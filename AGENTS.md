@@ -4,12 +4,13 @@
 
 These shared rules apply to both applications. The backend engineering guidance below is retained from `feature/backend`; descriptions of a desired production system are goals, not verified readiness claims.
 
-- Read [project context](docs/project-context.md), the [integration review](docs/integration-review.md), and [frontend instructions](frontend/AGENTS.md) before relevant work. Abhay primarily owns frontend and Chetan backend; coordinate contract/configuration changes.
-- The current integration is health-only. Keep checkout disabled and PayPal Sandbox-only. Do not make PayPal calls or payment operations during integration verification. Backend health does not establish payment readiness.
+- Read [project context](docs/project-context.md), the [integration review](docs/integration-review.md), and [frontend instructions](frontend/AGENTS.md) before relevant work. Abhay currently owns frontend, backend, integration, testing and final hackathon preparation because Chetan is unavailable. Preserve and credit Chetan's contributions.
+- Abhay has authorized necessary fixes across both applications, tests and documentation. Previous frontend-only/backend-edit restrictions are superseded. Work in focused milestones; the current milestone is backend-priced Sandbox demo checkout. Enable payment actions only with explicit local configuration, migrated storage, a backend-owned demo catalog and a complete guarded flow. Actual Sandbox checkout and separate cancellation return are verified at the documented UI/backend level; independent PayPal Dashboard comparison remains pending. Health alone never enables checkout. Never use PayPal Live.
 - Never read real `.env` secrets, request secrets in chat, or expose them in logs or frontend bundles. Keep provider secrets and access tokens on the backend; `VITE_` values are public configuration.
 - Preserve staged, unstaged, untracked and unrelated work. Do not stash, delete, commit unrelated files, switch existing checkouts, push, merge into `main`, or integrate branches without explicit authorization. Use a separate integration worktree when authorized.
-- Keep `docs/api-contract.md` as Chetan's contract. Record discrepancies and payment correctness findings separately until coordinated changes are authorized; passing existing tests does not close those findings.
-- Treat audience, business use case, donation/aid requirements and AI functionality as unresolved. Do not infer features from the project name or example copy.
+- Keep `docs/api-contract.md` aligned with verified implementation. Explain compatibility changes and preserve historical inspection evidence. Investigate each payment finding and add regression tests for confirmed defects; passing unrelated existing tests does not close findings.
+- Do not commit, push, merge into `main`, deploy or submit the hackathon entry without a new explicit instruction. Routine authorized edits and local checks do not require repeated approval.
+- The approved MVP is a small-merchant payment investigation assistant. Future AI provides read-only explanations of sanitized backend-verified status/audit events and safe suggestions; it cannot execute payments, change amounts or independently declare success. The current task does not authorize an AI endpoint. Fixed USD demo items are approved test fixtures, not final business pricing. Do not infer donation/aid features from the project name.
 - Explain decisions and progress to Abhay in simple Hinglish. Keep code, documentation, identifiers and commit messages in English.
 - Distinguish planned, implemented, statically inspected and runtime-verified behavior. Do not fabricate activity, metrics, connectivity, payment results or test results.
 - For frontend changes run `npm run lint`, `npm run build`, and relevant existing tests from `frontend/`. Backend checks are configured in `backend/pyproject.toml` and described in its README. For documentation changes validate links, paths and instruction filename casing. Apply available local skills without importing unrelated untracked files.
@@ -26,7 +27,7 @@ Work as an experienced engineer contributing to a real-world fintech product, no
 
 - Project: RescuePay-AI
 - Repository: https://github.com/Abhay1112Kumar/RescuePay-AI
-- Backend lead: Chetan
+- Backend lead: Abhay (current owner); Chetan contributed the original backend foundation
 - Frontend lead: Abhay
 - Repository strategy: One shared GitHub repository for frontend and backend
 - Payment provider: PayPal
@@ -60,7 +61,7 @@ Both developers contribute to the same GitHub repository.
 
 ### Backend ownership
 
-Chetan primarily handles:
+Abhay currently handles the following backend work, preserving Chetan's implementation:
 
 - Backend architecture
 - FastAPI application
@@ -84,7 +85,7 @@ Abhay primarily handles:
 - User-facing payment status
 - Dashboard and transaction views
 
-Ownership is not exclusive. Either developer can contribute to any part of the repository.
+Abhay currently owns both sides, integration, testing and hackathon preparation. Chetan's existing contributions remain part of the shared project history.
 
 ### Git rules
 

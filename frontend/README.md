@@ -1,5 +1,7 @@
 # RescuePay AI frontend
 
+Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent comparison of the successful capture in PayPal Dashboard remains pending. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](../docs/sandbox-checkout.md).
+
 A responsive React + TypeScript dashboard built with Vite. Includes overview, transaction history, and integration readiness views, with responsive navigation, transaction search/status filters, and accessible empty states.
 
 ## Local development
@@ -17,7 +19,7 @@ The UI checks `GET /api/v1/health` on mount and exposes a manual **Recheck backe
 
 The adapter in `src/api/health.ts` validates JSON at runtime: `status` must be `ok`, and `service` and `version` must be nonempty strings. Service names are configurable by the backend. HTTP failures, network errors, invalid responses (including HTML fallback pages), and a five-second timeout covering the response body are handled without displaying raw server errors. No credentials are sent by this health request.
 
-The response is compatible with integrated backend commit `b9d4b56`, specifically `backend/app/api/v1/health.py` and `backend/app/schemas/health.py` (version `0.2.0`). The retained API contract example omits `version` and uses a different default service name; that example is not accepted as a complete health response. See [project context](../docs/project-context.md) and the [integration review](../docs/integration-review.md) for current evidence and discrepancies.
+The response is compatible with integrated backend commit `b9d4b56`, specifically `backend/app/api/v1/health.py` and `backend/app/schemas/health.py` (version `0.2.0`). The current API contract includes version; historical inspection discrepancies remain recorded in the integration review. See [project context](../docs/project-context.md) and the [integration review](../docs/integration-review.md) for current evidence and discrepancies.
 
 Vite proxies local `/api` requests to `http://127.0.0.1:8000` by default. To target another locally running backend, set a non-secret shell variable **before starting Vite**:
 
@@ -40,13 +42,23 @@ npm run test:health
 
 The tests use Node's built-in test runner and TypeScript stripping (verified on Node 22.17.1; its experimental warning is expected). No test dependencies are added. Response fixtures cover validation, errors, timeouts, cancellation, and an isolated HTTP fixture verifies routing through the actual Vite configuration. Fixture success is not live backend or PayPal verification; fixtures are never loaded into the application.
 
-## Payment integration state
+## Backend-priced Sandbox checkout
 
-- Backend order creation, lookup and capture routes are implemented in the combined branch, with unresolved correctness findings. This frontend makes no payment or transaction requests. Webhooks and authentication remain placeholders.
-- Metrics display “Unavailable” / “No data yet”; they do not imply a zero balance or successful payments.
-- Transaction history is empty. Search and status filters operate on this empty state; there are no seeded transactions.
-- New payment and checkout controls are disabled. No payment creation, recovery, or success is simulated.
-- The integration checklist describes payment readiness; the separate backend health panel checks reachability only. “Frontend ready” only refers to the UI.
-- Navigation, filters, and the reporting period are local React state and reset on reload.
+Open /checkout. Follow [private setup and verification](../docs/sandbox-checkout.md) and the [API contract](../docs/api-contract.md). The backend serves two explicitly labeled fixed USD demo items; the browser submits only item_id plus a UUID Idempotency-Key. Health cannot enable payment actions. The catalog readiness response, exact return origin and usable session storage gate creation/approval/capture.
 
-Before enabling checkout, resolve the [payment correctness findings](../docs/integration-review.md#unresolved-payment-correctness-and-compatibility-findings), connect the required frontend flows and data sources, and separately authorize and verify the complete Sandbox flow. Existing tests and health success do not establish payment readiness. Secrets belong on the backend, never in client code.
+The flow covers selection, creation, same-tab Sandbox approval, /payment/return and /payment/cancel, capture and verified status. Both applications validate the exact HTTPS www.sandbox.paypal.com/checkoutnow destination and bound order token. Session storage retains one operation under rescuepay.sandbox.checkout.v1: create retries keep the same key; identity is saved before redirect and capture-attempt intent before capture. Only an explicit new-checkout action replaces the operation. Do not close the tab, clear storage or reset the database while an outcome is unresolved; lost local identity requires manual reconciliation, not another payment.
+
+Return parameters never prove payment. Capture requires fresh backend APPROVED evidence and no previous capture attempt. A timeout, reload or duplicate callback leads to read-only status reconciliation, never blind capture retry. COMPLETED requires an explicit backend-verified capture with matching identity/money; HTTP 200, APPROVED, redirect and CAPTURE_PENDING are not paid. Cancellation expresses browser intent and does not void the provider order. Pending, failed, loading, cancelled and uncertain states are explicit.
+
+Health keeps its five-second deadline and six-second proxy. Payment mutations allow 120 seconds, status 45 seconds and catalog eight seconds; Vite's payment proxy permits 150 seconds. A client timeout still leaves a potentially completed server operation. All failures are sanitized and response JSON is validated at runtime.
+
+```sh
+npm run lint
+npm run build
+npm run test:health
+npm run test:checkout
+```
+
+Checkout tests use Node's built-in runner and TypeScript stripping, without added dependencies. They test the actual adapter/controller with synthetic HTTP/storage/navigation fixtures. They do not prove real PayPal connectivity. Current health/catalog/configuration-gate checks use actual local FastAPI through Vite; actual Sandbox OAuth, buyer approval and capture await private configuration.
+
+Metrics remain unavailable and transaction history remains empty because list/metrics APIs are absent. Current checkout status appears in Checkout, not a fabricated history row. Authentication, verified webhooks and AI are not implemented; these development routes must remain local. No provider credentials belong in VITE_ configuration or frontend code.

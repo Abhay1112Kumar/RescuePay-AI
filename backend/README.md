@@ -1,211 +1,82 @@
-# RescuePay-AI — Backend (Phase 3)
+# RescuePay-AI backend
 
-Production-grade, modular FastAPI backend for the RescuePay-AI collaborative fintech and payment integration system.
+Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent comparison of the successful capture in PayPal Dashboard remains pending. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](../docs/sandbox-checkout.md).
 
-**Phase 3 status:** PayPal Sandbox OAuth, order creation, status lookup, and capture are implemented with database persistence, an audited payment state machine, and idempotent capture. Webhooks are planned for Phase 4.
+FastAPI backend originally contributed by Chetan and currently maintained by Abhay. This milestone hardens the Phase 3 foundation; it does not establish production readiness or a verified provider checkout.
 
----
+PayPal Sandbox exclusively. Live/arbitrary REST origins are rejected at configuration and HTTP boundaries. Checkout defaults to disabled and requires explicit private Sandbox setup. The catalog and frontend flow are implemented; real provider verification is pending. See [context](../docs/project-context.md), [correctness evidence](../docs/backend-correctness.md), and [API contract](../docs/api-contract.md).
 
-## 1. Directory Structure
+## Local setup
 
-```text
-backend/
-├── alembic/                    # Database migrations (async env, SQLite + PostgreSQL)
-│   ├── env.py
-│   └── versions/
-├── alembic.ini
-├── app/
-│   ├── __init__.py             # Package version (single source of truth)
-│   ├── main.py                 # FastAPI application factory, lifespan, CORS
-│   ├── api/v1/
-│   │   ├── router.py           # Aggregated API v1 router
-│   │   ├── deps.py             # Dependency providers (DB session, PayPal client, service)
-│   │   ├── health.py           # GET /api/v1/health
-│   │   ├── payments.py         # POST /orders, GET /orders/{id}, POST /orders/{id}/capture
-│   │   └── webhooks.py         # Webhook router placeholder (Phase 4)
-│   ├── core/
-│   │   ├── config.py           # Typed settings via pydantic-settings
-│   │   ├── exceptions.py       # Domain exceptions with HTTP status + error_code
-│   │   ├── error_handlers.py   # Standard error envelope for all failures
-│   │   └── logging.py          # Key=value structured logging (stdlib only)
-│   ├── db/
-│   │   ├── base.py             # Declarative base
-│   │   └── session.py          # Async engine + session factory
-│   ├── integrations/
-│   │   └── paypal.py           # Async PayPal REST client (OAuth cache, Orders v2, capture)
-│   ├── models/
-│   │   └── payment.py          # Payment (trusted record) + PaymentEvent (audit trail)
-│   ├── repositories/
-│   │   └── payment_repository.py  # Data access incl. atomic capture lock
-│   ├── schemas/
-│   │   └── payment.py          # Request/response contracts
-│   └── services/
-│       ├── payment_state.py    # Payment state machine
-│       └── payment_service.py  # Create / lookup / capture workflows
-├── tests/
-│   ├── conftest.py             # Fixtures: temp SQLite DB, FakePayPal (httpx.MockTransport)
-│   ├── test_health.py, test_config.py
-│   ├── test_paypal_client.py   # OAuth caching, 401 retry, timeouts, error mapping
-│   ├── test_payment_state.py   # Transition rules
-│   ├── test_payment_service.py # Persistence, validation, capture safety, concurrency
-│   ├── test_payments_api.py    # Endpoint contracts and error envelope
-│   └── test_migrations.py      # Alembic upgrade/downgrade matches models
-├── .env.example
-├── requirements.txt
-├── pyproject.toml
-└── README.md
-```
+Run from backend/. Python 3.11+ is required (current verification: 3.13.5).
 
----
-
-## 2. Quickstart & Setup (Windows PowerShell)
-
-All commands below should be executed from the `backend/` directory:
-
-```powershell
-cd c:\Users\hp\RescuePay-AI\backend
-```
-
-### Step 1: Verify Python Version
-Ensure Python 3.11 or newer is available:
-```powershell
-python --version
-```
-Expected output: `Python 3.11.x` (or newer).
-
-### Step 2: Create Virtual Environment
 ```powershell
 python -m venv .venv
-```
-*(Alternative using uv: `uv venv --python 3.11 .venv`)*
-
-### Step 3: Activate Virtual Environment
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-*(For Command Prompt: `.\.venv\Scripts\activate.bat` | For Linux/macOS: `source .venv/bin/activate`)*
-
-### Step 4: Install Dependencies
-```powershell
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+.venv/Scripts/python.exe -m pip install -r requirements.txt
 ```
 
-### Step 5: Configure Environment
-Copy `.env.example` to `.env`:
-```powershell
-Copy-Item .env.example .env
-```
-Default values in `.env` are configured safely for local development and PayPal Sandbox.
-
-Then fill in `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from a **Sandbox** app in the
-[PayPal Developer Dashboard](https://developer.paypal.com) (Apps & Credentials). Payment
-endpoints return `503 PAYPAL_NOT_CONFIGURED` until both are set. Never commit `.env`.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PAYPAL_MODE` | `sandbox` | `sandbox` or `live` |
-| `PAYPAL_BASE_URL` | `https://api-m.sandbox.paypal.com` | PayPal REST base URL |
-| `PAYPAL_TIMEOUT_SECONDS` | `15` | Per-request timeout to PayPal |
-| `PAYPAL_RETURN_URL` | `http://localhost:5173/payment/return` | Buyer redirect after approval |
-| `PAYPAL_CANCEL_URL` | `http://localhost:5173/payment/cancel` | Buyer redirect after cancel |
-| `PAYMENT_ALLOWED_CURRENCIES` | `USD` | Comma-separated ISO 4217 allowlist |
-| `PAYMENT_MAX_AMOUNT` | `10000.00` | Maximum order amount |
-| `LOG_LEVEL` | `INFO` | Root log level |
-| `DATABASE_URL` | `sqlite+aiosqlite:///<backend>/rescuepay.db` | Async SQLAlchemy URL. Use `postgresql+asyncpg://...` in deployment |
-| `DATABASE_ECHO` | `false` | Log SQL statements |
-| `DATABASE_AUTO_CREATE` | `false` | Create tables from models at startup (local only) |
-
-### Step 6: Create the database schema
-```powershell
-python -m alembic upgrade head
-```
-This creates `rescuepay.db` next to this README (gitignored). Re-run it after pulling new migrations. To generate a migration after changing models:
-```powershell
-python -m alembic revision --autogenerate -m "describe change"
-```
-
----
-
-## 3. Running the Application
-
-Start the FastAPI local development server with auto-reload:
+Health needs no credentials, real .env or database migration:
 
 ```powershell
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+$env:PAYPAL_MODE = 'sandbox'
+$env:PAYPAL_BASE_URL = 'https://api-m.sandbox.paypal.com'
+$env:PAYPAL_CLIENT_ID = ''
+$env:PAYPAL_CLIENT_SECRET = ''
+$env:PAYPAL_MERCHANT_ID = ''
+$env:DATABASE_AUTO_CREATE = 'false'
+$env:DATABASE_ECHO = 'false'
+.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
 
-Once running:
-- **Interactive Swagger Docs (OpenAPI):** [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc Documentation:** [http://localhost:8000/redoc](http://localhost:8000/redoc)
-- **Health Check Endpoint:** [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health)
-- **OpenAPI Schema JSON:** [http://localhost:8000/api/v1/openapi.json](http://localhost:8000/api/v1/openapi.json)
+Health: http://127.0.0.1:8001/api/v1/health; OpenAPI docs: http://127.0.0.1:8001/docs. Health does not check database/credentials/PayPal connectivity. For the separate integration preview, set RESCUEPAY_API_TARGET to this backend origin before starting Vite on port 5174.
 
----
+## Payment configuration and gate
 
-## 4. Sandbox Walkthrough (manual)
+The default PayableSource is the clearly labeled backend-owned DemoCatalog: demo-notebook-v1 = USD 1.00 and demo-stickers-v1 = USD 2.50. Public creation accepts item_id only, never client prices. Separate synthetic authorities remain test-only. This is not final commercial pricing.
 
-With the server running, credentials in `.env`, and the schema created:
+Follow [private Sandbox setup and verification](../docs/sandbox-checkout.md) for the complete local walkthrough. The catalog endpoint performs local configuration/schema checks without contacting PayPal. Health never enables checkout.
 
-1. Open http://localhost:8000/docs and call `POST /api/v1/payments/orders` with:
-   ```json
-   {"reference_id": "RESCUE-1001", "currency": "USD", "amount": "1.00", "description": "Sandbox test"}
-   ```
-2. Copy the `href` of the link with `rel: approve` and open it in a browser.
-3. Log in with the **Personal** (buyer) sandbox account from Testing Tools > Sandbox Accounts and approve.
-4. PayPal redirects to `PAYPAL_RETURN_URL?token=<order_id>&PayerID=...`.
-5. Call `GET /api/v1/payments/orders/{order_id}`; `status` should now be `APPROVED`.
-6. Call `POST /api/v1/payments/orders/{order_id}/capture`; `status` should be `COMPLETED` with a `capture_id`.
-   Sandbox funds move from the buyer account to the business account. Calling capture again returns the same result.
+| Setting | Requirement/default |
+| --- | --- |
+| SANDBOX_CHECKOUT_ENABLED | false by default; explicit local opt-in required |
+| PAYPAL_MODE | sandbox only |
+| PAYPAL_BASE_URL | https://api-m.sandbox.paypal.com only |
+| PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET | Private backend-only Sandbox configuration; never share in chat or use VITE_ variables |
+| PAYPAL_MERCHANT_ID | Expected Sandbox merchant identity for payment validation |
+| PAYPAL_TIMEOUT_SECONDS | 15 per request; positive, at most 60 |
+| PAYMENT_CAPTURE_LEASE_SECONDS | 120; expiry allows reconciliation, never another charge |
+| PAYPAL_RETURN_URL / PAYPAL_CANCEL_URL | Exact same-origin loopback handlers; .env.example uses 127.0.0.1:5174/payment/return and /payment/cancel (Settings defaults still localhost:5173) |
+| PAYMENT_ALLOWED_CURRENCIES / PAYMENT_MAX_AMOUNT | USD / 10000.00; limits are not a price authority |
+| DATABASE_URL | Local SQLite via aiosqlite by default |
+| DATABASE_ECHO / DATABASE_AUTO_CREATE | false / false |
 
-Payment flow in one line: **create → buyer approves → capture → `COMPLETED`**. Only `COMPLETED` means paid.
+When real Sandbox verification starts, the maintainer may copy .env.example and configure privately. Do not copy/read a real .env for health checks. No real credentials were needed/read in this milestone.
 
-## 5. Running Tests & Quality Checks
+## Persistence and migrations
 
-Ensure the virtual environment is activated before running tests:
-
-### Run Automated Tests (pytest)
 ```powershell
-python -m pytest -v
+.venv/Scripts/python.exe -m alembic upgrade head
 ```
-All PayPal traffic in the suite is mocked with `httpx.MockTransport`; no network access or credentials are needed.
 
-### Run Ruff Code Quality Linting
+Review/back up existing storage and stop old backend processes before migration. Migration 0002 adds creation keys, stored approval links and optimistic versions; legacy COMPLETED rows become CAPTURE_UNCERTAIN with an audit event because prior verification was weaker. Temporary-database tests cover this behavior. No developer database was migrated. Downgrade refuses unresolved uncertainty instead of exposing it to old retry behavior. Do not use automatic table creation to upgrade existing storage.
+
+SQLite is the verified test database. PostgreSQL/multi-host behavior is unverified; no PostgreSQL driver is included in current requirements.
+
+## Checks
+
 ```powershell
-python -m ruff check .
-```
-To automatically apply safe fixes:
-```powershell
-python -m ruff check --fix .
-```
-
-### Run Ruff Formatting Check
-```powershell
-python -m ruff format --check .
-```
-To auto-format code:
-```powershell
-python -m ruff format .
+.venv/Scripts/python.exe -m pytest -q --tb=short
+.venv/Scripts/python.exe -m ruff check --no-cache .
+.venv/Scripts/python.exe -m ruff format --check .
+.venv/Scripts/python.exe -m pip check
 ```
 
----
+Provider calls are mocked. Avoid developer credential/application overrides when running configuration tests; fixtures install synthetic settings. Current verification also used an ignored socket guard for non-loopback network isolation. See the correctness report for actual results and warnings.
 
-## 6. Windows Troubleshooting Tips
+## Payment behavior
 
-1. **PowerShell Script Execution Policy Error:**
-   If running `Activate.ps1` gives an execution policy error, enable script execution for the current user:
-   ```powershell
-   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-   ```
+Creation requires UUID Idempotency-Key. Replays return the persisted operation; conflicting bodies return 409. Ambiguous creation remains blocked instead of creating a second order. This is per-operation idempotency, not per-invoice uniqueness.
 
-2. **Windows Store Python Alias Interception:**
-   If `python` redirects to the Microsoft Store, disable the App Execution Alias:
-   - Go to **Windows Settings** > **Apps** > **Advanced app settings** > **App execution aliases**.
-   - Toggle **App Installer (python.exe)** and **App Installer (python3.exe)** to **Off**.
-   - Ensure `C:\Users\<username>\.local\bin` or your Python directory is listed first in your User `PATH`.
+Capture uses conditional state/version checks and verifies provider identity/full capture evidence. Unknown outcomes stay CAPTURE_UNCERTAIN and reconcile via GET. Expired locks never authorize another capture. Approval, redirect, pending, top-level order COMPLETED and HTTP 200 are insufficient for paid status.
 
-3. **Port 8000 Already in Use:**
-   If port 8000 is occupied, run on another port:
-   ```powershell
-   python -m uvicorn app.main:app --reload --port 8080
-   ```
+Authentication/ownership and webhook handlers remain placeholders. Refunds, public deployment and AI are not implemented. The buyer checkout flow is implemented and mocked; actual Sandbox approval/capture remains pending private configuration. See the checkout report for current evidence.

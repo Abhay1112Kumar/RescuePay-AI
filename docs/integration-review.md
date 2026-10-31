@@ -1,5 +1,7 @@
 # Frontend/backend integration review
 
+Historical integration-only snapshot at `1184c78`. For the current ownership, authorized backend fixes, changed API contract, tests and findings disposition, read [backend correctness](backend-correctness.md) and [project context](project-context.md). The open findings and restrictions below describe the earlier inspection, not current resolution status.
+
 Date: 2026-10-31. Scope: combine the pushed feature branches for review without changing payment logic, enabling checkout, contacting PayPal, pushing, or merging into `main`.
 
 ## Git sources and preservation
