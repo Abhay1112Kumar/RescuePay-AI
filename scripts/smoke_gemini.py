@@ -6,6 +6,7 @@ ledger already contains attempts. No credentials, model payloads or PII logged.
 import asyncio
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,7 +39,7 @@ async def main():
     if "--run-authorized" not in sys.argv and not single and not risk:
         print("No request sent: explicit --run-authorized required.")
         return
-    settings = Settings()
+    settings = Settings(_env_file=os.getenv("RESCUEPAY_PRIVATE_ENV_FILE") or None)
     if settings.GEMINI_ENABLED:
         print("No request sent: disable persistent Gemini configuration first.")
         return
