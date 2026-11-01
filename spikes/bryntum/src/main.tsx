@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createRoot } from 'react-dom/client'
 import { BryntumScheduler } from '@bryntum/scheduler-react'
 import { isTimelineEnabled, projectTimeline, syntheticRecords } from './timeline-model.mjs'
 import './styles.css'
+
+type TimelineAudit = { recorded_at: string; code: string }
+type TimelineRow = { id: string; name: string; state: string; amount: string; currency: string; freshness: string; uncertain: boolean; deadline: string; safeAction: string; audit: TimelineAudit[] }
 
 export function PaymentRecoveryTimeline() {
   const enabled = isTimelineEnabled(import.meta.env.VITE_BRYNTUM_TIMELINE_ENABLED)
@@ -12,7 +16,7 @@ export function PaymentRecoveryTimeline() {
     const timer = window.setTimeout(() => setLoading(false), 120)
     return () => window.clearTimeout(timer)
   }, [enabled])
-  const records = useMemo(() => projectTimeline(syntheticRecords), [])
+  const records = useMemo<TimelineRow[]>(() => projectTimeline(syntheticRecords) as TimelineRow[], [])
   const start = new Date('2026-10-31T00:00:00Z')
   const end = new Date('2026-11-03T00:00:00Z')
   const resources = records.map((record) => ({ id: record.id, name: `${record.name} · ${record.state}` }))
@@ -35,3 +39,6 @@ export function PaymentRecoveryTimeline() {
 }
 
 export default PaymentRecoveryTimeline
+
+const root = document.getElementById('root')
+if (root) createRoot(root).render(<PaymentRecoveryTimeline />)

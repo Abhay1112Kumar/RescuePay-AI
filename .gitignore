@@ -92,3 +92,8 @@ backend/.local/
 *.sqlite3-shm
 *.log
 .ruff_cache/
+
+# Local Bryntum evaluation/licence material
+.bryntum/
+bryntum*.key
+bryntum*.license.json

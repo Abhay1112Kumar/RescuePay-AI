@@ -49,7 +49,8 @@ read-only annotation, while backend evidence remains authoritative.
 - TypeScript: 6.0.3
 - Vite: 8.3.5
 
-The trial package was not installed or activated. Bryntum documents a
+The documented trial package was installed locally with scripts disabled for
+evaluation; no trial key was entered or activated. Bryntum documents a
 14-day unlicensed evaluation, a 45-day key-based trial, watermark/console
 notices, and commercial Business/Enterprise licensing. Trial/judge access,
 public repository rights, and use through the judging period are unconfirmed.
@@ -64,7 +65,8 @@ spike. If Bryntum rights are later confirmed, the spike requires its own
 dependency install and licence arrangement; otherwise use the existing React
 timeline/evidence panel as the no-commercial-dependency fallback.
 
-The isolated model tests pass without installing Bryntum (4 tests). A full
-Bryntum typecheck/build/browser run is intentionally pending licence/access
-approval; the feature flag defaults to disabled so normal application startup
-does not require the commercial package.
+The isolated model tests pass (4 tests). Bryntum typecheck and build pass, and
+the enabled/disabled browser states were inspected locally with synthetic
+records. The feature flag defaults to disabled so normal application startup
+does not require the commercial package. Public judge rights, trial duration,
+watermark expectations and redistribution remain unconfirmed.
