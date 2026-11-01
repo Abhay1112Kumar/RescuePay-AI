@@ -2,6 +2,8 @@
 body { margin: 0; font-family: system-ui, sans-serif; color: #1f2340; background: #f7f6ff; }
 .spike-shell { max-width: 1100px; margin: 0 auto; padding: 24px; }
 .synthetic-label { color: #7139c6; font-weight: 700; letter-spacing: .04em; }
+.spike-shell button { border: 1px solid #7139c6; border-radius: 6px; padding: 8px 12px; background: white; color: #4b218d; cursor: pointer; }
+.spike-shell button:focus-visible { outline: 3px solid #f2a900; outline-offset: 2px; }
 .timeline-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }
 .timeline-summary article { display: grid; gap: 6px; padding: 14px; background: white; border: 1px solid #d9d5ef; border-radius: 10px; }
 .timeline-frame { min-height: 520px; background: white; border-radius: 10px; overflow: hidden; }

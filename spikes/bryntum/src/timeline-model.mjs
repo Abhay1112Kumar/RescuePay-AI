@@ -11,6 +11,8 @@ export function projectTimeline(records) {
         id: record.reference,
         name: `${record.reference} — synthetic/demo evidence`,
         state,
+        amount: record.amount,
+        currency: record.currency,
         freshness: record.freshness === 'stale' ? 'STALE' : 'NOT_CHECKED',
         uncertain: Boolean(record.uncertain),
         deadline: record.reconciliation_deadline,
@@ -21,7 +23,11 @@ export function projectTimeline(records) {
 }
 
 export const syntheticRecords = [
-  { owner_id: 'demo-merchant', reference_namespace: 'synthetic', reference: 'SYNTH-UNCERTAIN-001', state: 'CAPTURE_UNCERTAIN', freshness: 'stale', uncertain: true, reconciliation_deadline: '2026-11-01T12:00:00Z', safe_action: 'MANUAL_RECONCILIATION', audit: [{ recorded_at: '2026-10-31T10:00:00Z', code: 'RECORD_CREATED' }, { recorded_at: '2026-10-31T10:01:00Z', code: 'CAPTURE_UNCERTAIN' }] },
-  { owner_id: 'demo-merchant', reference_namespace: 'demo', reference: 'DEMO-COMPLETED-001', state: 'COMPLETED', freshness: 'not_checked', uncertain: false, reconciliation_deadline: '2026-11-02T12:00:00Z', safe_action: 'REVIEW_RECORD', audit: [{ recorded_at: '2026-10-31T09:00:00Z', code: 'RECORD_CREATED' }, { recorded_at: '2026-10-31T09:02:00Z', code: 'CAPTURE_COMPLETED' }] },
-  { owner_id: 'other-user', reference_namespace: 'synthetic', reference: 'SYNTH-OTHER-001', state: 'COMPLETED', freshness: 'not_checked', uncertain: false, reconciliation_deadline: '2026-11-02T12:00:00Z', safe_action: 'REVIEW_RECORD', audit: [] },
+  { owner_id: 'demo-merchant', reference_namespace: 'synthetic', reference: 'SYNTH-UNCERTAIN-001', state: 'CAPTURE_UNCERTAIN', amount: '1.00', currency: 'USD', freshness: 'stale', uncertain: true, reconciliation_deadline: '2026-11-01T12:00:00Z', safe_action: 'MANUAL_RECONCILIATION', audit: [{ recorded_at: '2026-10-31T10:00:00Z', code: 'RECORD_CREATED' }, { recorded_at: '2026-10-31T10:01:00Z', code: 'CAPTURE_UNCERTAIN' }] },
+  { owner_id: 'demo-merchant', reference_namespace: 'demo', reference: 'DEMO-COMPLETED-001', state: 'COMPLETED', amount: '1.00', currency: 'USD', freshness: 'not_checked', uncertain: false, reconciliation_deadline: '2026-11-02T12:00:00Z', safe_action: 'REVIEW_RECORD', audit: [{ recorded_at: '2026-10-31T09:00:00Z', code: 'RECORD_CREATED' }, { recorded_at: '2026-10-31T09:02:00Z', code: 'CAPTURE_COMPLETED' }] },
+  { owner_id: 'other-user', reference_namespace: 'synthetic', reference: 'SYNTH-OTHER-001', state: 'COMPLETED', amount: '9.99', currency: 'USD', freshness: 'not_checked', uncertain: false, reconciliation_deadline: '2026-11-02T12:00:00Z', safe_action: 'REVIEW_RECORD', audit: [] },
 ]
+
+export function isTimelineEnabled(value) {
+  return String(value).toLowerCase() === 'true'
+}

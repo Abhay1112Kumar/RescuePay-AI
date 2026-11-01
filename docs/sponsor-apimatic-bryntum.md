@@ -30,6 +30,11 @@ action, and ordered audit events. Unsupported states/actions fall back to
 safe display values. No buyer PII, credentials, raw provider payloads or
 unnecessary provider identifiers are accepted.
 
+The spike is explicitly disabled unless
+`VITE_BRYNTUM_TIMELINE_ENABLED=true`. Disabled, loading, empty,
+unavailable/error, and narrow-screen states are implemented. The normal
+RescuePay application does not import this package.
+
 The UI is labelled `SYNTHETIC/DEMO EVIDENCE ONLY` and uses a narrow-screen CSS
 layout. Bryntum receives no action callbacks capable of capture, refund,
 amount changes, PayPal refresh, or payment-success decisions. Gemini is not
@@ -59,5 +64,7 @@ spike. If Bryntum rights are later confirmed, the spike requires its own
 dependency install and licence arrangement; otherwise use the existing React
 timeline/evidence panel as the no-commercial-dependency fallback.
 
-The isolated model tests pass without installing Bryntum. A full Bryntum
-typecheck/build/browser run is intentionally pending licence/access approval.
+The isolated model tests pass without installing Bryntum (4 tests). A full
+Bryntum typecheck/build/browser run is intentionally pending licence/access
+approval; the feature flag defaults to disabled so normal application startup
+does not require the commercial package.

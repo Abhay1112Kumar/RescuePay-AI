@@ -1,13 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { projectTimeline } from '../src/timeline-model.mjs'
+import { isTimelineEnabled, projectTimeline } from '../src/timeline-model.mjs'
 
-const base = (overrides = {}) => ({ owner_id: 'demo-merchant', reference_namespace: 'synthetic', reference: 'SYNTH-001', state: 'CAPTURE_UNCERTAIN', freshness: 'stale', uncertain: true, reconciliation_deadline: '2026-11-01T12:00:00Z', safe_action: 'MANUAL_RECONCILIATION', audit: [{ recorded_at: '2026-10-31T02:00:00Z', code: 'CAPTURE_UNCERTAIN' }, { recorded_at: '2026-10-31T01:00:00Z', code: 'RECORD_CREATED' }], ...overrides })
+const base = (overrides = {}) => ({ owner_id: 'demo-merchant', reference_namespace: 'synthetic', reference: 'SYNTH-001', state: 'CAPTURE_UNCERTAIN', amount: '1.00', currency: 'USD', freshness: 'stale', uncertain: true, reconciliation_deadline: '2026-11-01T12:00:00Z', safe_action: 'MANUAL_RECONCILIATION', audit: [{ recorded_at: '2026-10-31T02:00:00Z', code: 'CAPTURE_UNCERTAIN' }, { recorded_at: '2026-10-31T01:00:00Z', code: 'RECORD_CREATED' }], ...overrides })
 
 test('projects only owned synthetic/demo records and redacts other namespaces', () => {
   const rows = projectTimeline([base(), base({ reference_namespace: 'paypal', reference: 'raw-provider' }), base({ owner_id: 'other-user', reference: 'other-owner' })])
   assert.deepEqual(rows.map((row) => row.id), ['SYNTH-001'])
   assert.equal(rows[0].name.includes('synthetic/demo'), true)
+  assert.equal(rows[0].amount, '1.00')
+  assert.equal(rows[0].currency, 'USD')
 })
 
 test('orders audit events and preserves uncertain/stale markers', () => {
@@ -22,4 +24,11 @@ test('invalid state/action fall back to safe read-only display values', () => {
   const [row] = projectTimeline([base({ state: 'PAID', safe_action: 'CAPTURE' })])
   assert.equal(row.state, 'STALE')
   assert.equal(row.safeAction, 'REVIEW_RECORD')
+})
+
+test('feature flag and projected records expose no payment operation methods', () => {
+  assert.equal(isTimelineEnabled('true'), true)
+  assert.equal(isTimelineEnabled('false'), false)
+  const [row] = projectTimeline([base()])
+  assert.equal(Object.keys(row).some((key) => /capture|refund|refresh|amountChange/i.test(key)), false)
 })
