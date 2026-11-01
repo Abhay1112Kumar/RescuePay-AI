@@ -16,8 +16,10 @@ must be evaluated separately if its feature set is sufficient.
 
 ## Planned local verification
 
-After licence approval only: `npm ci`, `npm test`, `npm run check`, `npm run build`,
-then `npm run dev` and open `http://127.0.0.1:5179/`. No PayPal/Gemini calls are
-needed. Current model tests run without Bryntum installed and validate
-ownership filtering, redaction, ordering, uncertain/stale display, and safe
-action fallback.
+After licence approval only: set `VITE_BRYNTUM_TIMELINE_ENABLED=true`, then
+run `npm ci`, `npm test`, `npm run check`, `npm run build`, `npm run dev` and
+open `http://127.0.0.1:5179/`. With the flag absent/false the spike renders an
+accessible disabled state and the normal RescuePay application remains
+dependency-free. No PayPal/Gemini calls are needed. Current model tests run
+without Bryntum installed and validate ownership filtering, redaction,
+ordering, uncertain/stale display, safe-action fallback, and feature disable.
