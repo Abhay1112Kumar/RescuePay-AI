@@ -1,0 +1,23 @@
+{
+  "name": "rescuepay-bryntum-recovery-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/timeline-model.test.mjs",
+    "check": "tsc --noEmit",
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1 --port 5179 --strictPort"
+  },
+  "dependencies": {
+    "@bryntum/scheduler": "npm:@bryntum/scheduler-trial@7.3.7",
+    "@bryntum/scheduler-react": "7.3.7",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "~6.0.3",
+    "vite": "8.3.5"
+  }
+}
