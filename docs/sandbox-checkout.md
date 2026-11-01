@@ -1,6 +1,6 @@
 # Backend-priced Sandbox checkout
 
-Current verification: actual USD 1.00 Sandbox checkout and a separate cancellation return are verified against the frontend evidence, backend records and audit transitions. Independent comparison of the successful capture in PayPal Dashboard remains pending. Historical setup/blocker notes below describe earlier stages. Authentication, verified webhooks, AI and the other documented limits remain unresolved. See [checkout evidence](sandbox-checkout.md).
+Current verification: actual USD 1.00 Sandbox checkout, a separate cancellation return, and independent seller Dashboard comparison of the successful capture are verified against frontend evidence, backend records, audit transitions, and provider transaction details. Historical setup/blocker notes below describe earlier stages. Gemini has exactly two synthetic validations recorded (uncertain and stale), remains disabled by default, and live browser-to-Gemini verification remains pending.
 
 Implemented 2026-10-31 in the existing integration worktree, branch `integration/frontend-backend`, HEAD `1184c78`. Changes remain uncommitted. Existing correctness work, synthetic fixtures, documentation and skills are preserved. Main, the original frontend checkout and remote branches were not changed this milestone. Chetan's contribution is retained; Abhay owns the combined implementation.
 
@@ -134,7 +134,7 @@ Node emits its expected experimental TypeScript-stripping warning. No dependenci
 
 The immediate blocker is private Sandbox app credentials, seller merchant identity and explicit opt-in, then a fresh backend restart and actual buyer walkthrough. Mock checks do not prove provider credentials, account eligibility, real approval links or capture behavior.
 
-Development routes are unauthenticated and must stay local. Verified webhooks, automatic ambiguous-creation reconciliation, cross-device recovery, split capture, refunds/disputes, PostgreSQL/multi-host operation, history/metrics, AI and deployment are outside this verification. Final commercial pricing authority, AI provider/access policy and open-source license remain later decisions. No commit, push, main merge, deployment or submission occurred.
+Development routes use the documented local demo boundary and must stay local. Verified webhooks, automatic ambiguous-creation reconciliation, cross-device recovery, split capture, refunds/disputes, PostgreSQL/multi-host operation, history/metrics and deployment are outside this verification. The read-only Gemini explanation is separately documented and remains disabled by default; no autonomous payment operation exists. No commit, push, main merge, deployment or submission occurred.
 
 ## Private configuration readiness follow-up
 

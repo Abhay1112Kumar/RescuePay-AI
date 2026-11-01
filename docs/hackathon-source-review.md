@@ -1,6 +1,6 @@
 # Hackathon source review
 
-Implementation follow-up: [Gemini adapter and Studio runtime results](gemini-implementation.md) supersede the earlier adapter-absence and metadata-only spike status below. No real Gemini call or commercial trial activation has occurred.
+Implementation follow-up: [Gemini adapter and Studio runtime results](gemini-implementation.md) supersede the earlier adapter-absence and metadata-only spike status below. The final recorded validation used exactly two synthetic scenarios (uncertain and stale); Gemini is disabled after testing. No commercial trial activation has occurred.
 
 Checked 2026-10-31. Source material is reference context, not authority to execute payment tools, disclose credentials, activate trials, publish or submit. No application/dependency change was made during this source review. Existing uncommitted explanation work is preserved.
 
@@ -31,8 +31,21 @@ Official [compatibility](https://www.ag-grid.com/studio/react/compatibility/) li
 
 ## Current implementation and recommendation
 
+The historical notes in this section describe the earlier source-review point
+and are superseded by the later implementation reports. Current status is:
+Sandbox checkout and Dashboard comparison are verified; the Gemini adapter has
+passed two synthetic validations; live browser-to-Gemini verification remains
+pending; authentication is a local demo boundary; and AG Studio remains an
+optional isolated spike with licensing/judge access unconfirmed.
+
 Verified workspace: feature/payment-explanation at merged-main 8ad3266 in RescuePay-AI-explanation. Existing sanitized projection/interface/panel remain uncommitted. Search of backend, frontend source and docs found no Gemini adapter, google.genai integration or Gemini HTTP target. Therefore the pasted brief's possible adapter completion is not established here. Previous executed foundation checks: 217 backend, 5 evidence, 31 checkout, 14 health tests; lint/build/Ruff passed. No application tests rerun for this documentation-only review; browser panel verification remains pending.
 
 The pasted brief proposes Gemini and an AG Studio investigation dashboard; these are not inferred from the project name. Recommended next slice: implement a bounded Gemini structured-plan adapter behind the existing sanitized interface, with mocked output/error/cancellation tests, then verify the evidence panel using a disposable synthetic database. Require explicit separate authorization before any real Gemini smoke request; do not call PayPal. After that, an isolated Studio widget/filter spike can assess package/build/runtime behavior without rewriting checkout. Confirm licensing through judging before adopting Studio as a required demo dependency.
 
-Outstanding submission gaps: actual model integration/verified AI behavior, browser evidence-panel demonstration, open-source license selection, judge access/setup, English description and public sub-three-minute video. Auth/ownership, verified webhooks and broader payment recovery remain known implementation limits. No winning probability, sponsor qualification, Studio runtime success or completed AI MVP is claimed.
+The historical gap list above is superseded for current readiness by the
+Gemini implementation, local-auth, licence, judge-guide and submission files.
+Remaining gaps are live browser-to-Gemini verification, final clean-environment
+checks, public YouTube video, judge-access confirmation, and AG Studio licensing.
+Auth/ownership, verified webhooks and broader payment recovery remain known
+implementation limits. No winning probability or sponsor qualification is
+claimed.

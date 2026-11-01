@@ -46,6 +46,12 @@ The four October 3 PDFs are now available at the user-provided Downloads paths a
 
 ## Gemini adapter and isolated Studio runtime milestone
 
+Final readiness status: exactly two synthetic Gemini scenarios (one uncertain,
+one stale) passed strict validation; Gemini is disabled by default and live
+browser-to-Gemini verification remains pending. AG Studio is optional and its
+licensing/judge-period access are unconfirmed. The local authentication layer
+is a demo ownership boundary, not production identity management.
+
 See [implementation results](gemini-implementation.md). Gemini REST adapter is implemented behind explicit default-off configuration; only mocked provider outputs were tested. No external model or PayPal calls were made. Synthetic evidence panel verification and an isolated AG Studio custom-widget runtime spike completed. Studio evaluation warnings are present; no trial key was activated and judging/deployment license access remains unresolved. All work remains uncommitted on feature/payment-explanation.
 
 
